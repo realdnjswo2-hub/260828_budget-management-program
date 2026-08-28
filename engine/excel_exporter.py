@@ -1,8 +1,8 @@
 """
 서식형 결과 엑셀 파일 생성기 (Excel Report Exporter)
-- 공공기관 세출예산 사업명세서 및 예산관리대장 표준 서식 적용
+- 세부사업 - 편성목 - 통계목 - 세목 계층 표준 서식
 - 1월 ~ 12월 월별 지출 예산 통계 매트릭스 시트
-- 1~4회 추경예산 변동 현황표 시트 추가
+- 1~4회 추경예산 변동 현황표 시트
 - openpyxl을 활용한 스타일링 (헤더 색상, 테두리, 통화 서식, 열 너비 자동 조정)
 """
 
@@ -69,7 +69,7 @@ class ExcelExporter:
         ws1 = wb.create_sheet(title="세목별 예산관리대장")
         wb.remove(default_sheet)
 
-        ws1.merge_cells("A1:K1")
+        ws1.merge_cells("A1:M1")
         ws1["A1"] = "세출예산 세목별 예산관리대장 및 연말(12.31) 예측 현황"
         ws1["A1"].font = font_title
         ws1["A1"].alignment = align_left
@@ -78,7 +78,7 @@ class ExcelExporter:
         ws1["A2"].font = font_subtitle
 
         headers1 = [
-            "통계목", "세목 (산출기초)", "배정예산액 (A)", "기집행액 (B)", "현재잔액 (A-B)", 
+            "세부사업", "편성목", "통계목", "세목 (산출기초)", "배정예산액 (A)", "기집행액 (B)", "현재잔액 (A-B)", 
             "현재 집행률", "연말 잔여정기지출", "하반기 집행예정", "12.31 예상지출 (C)", "12.31 예상잔액 (A-C)", "상태판정"
         ]
         
@@ -98,37 +98,41 @@ class ExcelExporter:
             acc = item["account"]
             if acc != current_acc:
                 current_acc = acc
-                ws1.cell(row=current_row, column=1, value=acc).font = font_bold
+                ws1.cell(row=current_row, column=1, value=item.get("detail_project", "-")).font = font_bold
+                ws1.cell(row=current_row, column=2, value=item.get("category", "-")).font = font_bold
+                ws1.cell(row=current_row, column=3, value=acc).font = font_bold
                 for c in range(1, len(headers1) + 1):
                     ws1.cell(row=current_row, column=c).fill = fill_account
                     ws1.cell(row=current_row, column=c).border = border_all
                 current_row += 1
 
-            ws1.cell(row=current_row, column=1, value=item["account"]).alignment = align_left
-            ws1.cell(row=current_row, column=2, value=item["sub_account"]).alignment = align_left
+            ws1.cell(row=current_row, column=1, value=item.get("detail_project", "-")).alignment = align_left
+            ws1.cell(row=current_row, column=2, value=item.get("category", "-")).alignment = align_left
+            ws1.cell(row=current_row, column=3, value=item["account"]).alignment = align_left
+            ws1.cell(row=current_row, column=4, value=item["sub_account"]).alignment = align_left
             
-            c3 = ws1.cell(row=current_row, column=3, value=item["budget"])
-            c4 = ws1.cell(row=current_row, column=4, value=item["actual_spent"])
-            c5 = ws1.cell(row=current_row, column=5, value=item["current_balance"])
-            c6 = ws1.cell(row=current_row, column=6, value=item["exec_rate"] / 100.0)
-            c7 = ws1.cell(row=current_row, column=7, value=item["remaining_recurring"])
-            c8 = ws1.cell(row=current_row, column=8, value=item["scheduled_spent"])
-            c9 = ws1.cell(row=current_row, column=9, value=item["forecast_total_spent"])
-            c10 = ws1.cell(row=current_row, column=10, value=item["forecast_balance"])
-            c11 = ws1.cell(row=current_row, column=11, value=item["status"])
+            c5 = ws1.cell(row=current_row, column=5, value=item["budget"])
+            c6 = ws1.cell(row=current_row, column=6, value=item["actual_spent"])
+            c7 = ws1.cell(row=current_row, column=7, value=item["current_balance"])
+            c8 = ws1.cell(row=current_row, column=8, value=item["exec_rate"] / 100.0)
+            c9 = ws1.cell(row=current_row, column=9, value=item["remaining_recurring"])
+            c10 = ws1.cell(row=current_row, column=10, value=item["scheduled_spent"])
+            c11 = ws1.cell(row=current_row, column=11, value=item["forecast_total_spent"])
+            c12 = ws1.cell(row=current_row, column=12, value=item["forecast_balance"])
+            c13 = ws1.cell(row=current_row, column=13, value=item["status"])
 
-            for c in [c3, c4, c5, c7, c8, c9, c10]:
+            for c in [c5, c6, c7, c9, c10, c11, c12]:
                 c.number_format = num_format_currency
                 c.alignment = align_right
-            c6.number_format = num_format_percent
-            c6.alignment = align_right
-            c11.alignment = align_center
+            c8.number_format = num_format_percent
+            c8.alignment = align_right
+            c13.alignment = align_center
 
             if "초과" in item["status"]:
-                c10.font = font_danger
-                c11.font = font_danger
+                c12.font = font_danger
+                c13.font = font_danger
             elif "불용" in item["status"]:
-                c11.font = font_warning
+                c13.font = font_warning
 
             for c_idx in range(1, len(headers1) + 1):
                 cell = ws1.cell(row=current_row, column=c_idx)
@@ -141,14 +145,17 @@ class ExcelExporter:
         # 총계 행
         ws1.row_dimensions[current_row].height = 24
         ws1.cell(row=current_row, column=1, value="합 계").alignment = align_center
-        ws1.cell(row=current_row, column=2, value="전체 세목 총괄").alignment = align_center
-        t_b = ws1.cell(row=current_row, column=3, value=simulation_data.get("total_budget", 0))
-        t_s = ws1.cell(row=current_row, column=4, value=simulation_data.get("total_spent", 0))
-        t_cb = ws1.cell(row=current_row, column=5, value=simulation_data.get("current_balance", 0))
-        t_er = ws1.cell(row=current_row, column=6, value=simulation_data.get("overall_exec_rate", 0) / 100.0)
-        t_fs = ws1.cell(row=current_row, column=9, value=simulation_data.get("total_forecast_spent", 0))
-        t_fb = ws1.cell(row=current_row, column=10, value=simulation_data.get("total_forecast_balance", 0))
-        t_st = ws1.cell(row=current_row, column=11, value=f"최종 {simulation_data.get('overall_forecast_exec_rate', 0)}%")
+        ws1.cell(row=current_row, column=2, value="전체").alignment = align_center
+        ws1.cell(row=current_row, column=3, value="총괄").alignment = align_center
+        ws1.cell(row=current_row, column=4, value="전체 세목").alignment = align_center
+        
+        t_b = ws1.cell(row=current_row, column=5, value=simulation_data.get("total_budget", 0))
+        t_s = ws1.cell(row=current_row, column=6, value=simulation_data.get("total_spent", 0))
+        t_cb = ws1.cell(row=current_row, column=7, value=simulation_data.get("current_balance", 0))
+        t_er = ws1.cell(row=current_row, column=8, value=simulation_data.get("overall_exec_rate", 0) / 100.0)
+        t_fs = ws1.cell(row=current_row, column=11, value=simulation_data.get("total_forecast_spent", 0))
+        t_fb = ws1.cell(row=current_row, column=12, value=simulation_data.get("total_forecast_balance", 0))
+        t_st = ws1.cell(row=current_row, column=13, value=f"최종 {simulation_data.get('overall_forecast_exec_rate', 0)}%")
 
         for c in [t_b, t_s, t_cb, t_fs, t_fb]:
             c.number_format = num_format_currency
@@ -166,7 +173,7 @@ class ExcelExporter:
         for col in ws1.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
             col_letter = get_column_letter(col[0].column)
-            ws1.column_dimensions[col_letter].width = max(max_len * 1.5, 13)
+            ws1.column_dimensions[col_letter].width = max(max_len * 1.4, 12)
 
         # =============================================================
         # 2. 시트: 📊 추경 예산 변동 현황표 (1~4회 추경 비교)
@@ -174,7 +181,7 @@ class ExcelExporter:
         supp_data = simulation_data.get("supplementary_matrix", {})
         if supp_data and supp_data.get("rows"):
             ws_s = wb.create_sheet(title="추경예산 변동현황(1~4회)")
-            ws_s.merge_cells("A1:L1")
+            ws_s.merge_cells("A1:M1")
             ws_s["A1"] = "세출예산 세목별 1~4회 추가경정예산 변동 이력 및 현황표"
             ws_s["A1"].font = font_title
             ws_s["A1"].alignment = align_left
@@ -183,7 +190,7 @@ class ExcelExporter:
             ws_s["A2"].font = font_subtitle
 
             headers_s = [
-                "통계목", "세목 (산출기초)", "당초 본예산",
+                "세부사업", "통계목", "세목 (산출기초)", "당초 본예산",
                 "1회 추경(±)", "2회 추경(±)", "3회 추경(±)", "4회 추경(±)",
                 "최종 확정예산", "기집행액", "현재잔액", "집행률", "증감사유 및 내역"
             ]
@@ -204,32 +211,34 @@ class ExcelExporter:
                 acc = sr["account"]
                 if acc != curr_s_acc:
                     curr_s_acc = acc
-                    ws_s.cell(row=s_idx, column=1, value=acc).font = font_bold
+                    ws_s.cell(row=s_idx, column=1, value=sr.get("detail_project", "-")).font = font_bold
+                    ws_s.cell(row=s_idx, column=2, value=acc).font = font_bold
                     for c in range(1, len(headers_s) + 1):
                         ws_s.cell(row=s_idx, column=c).fill = fill_account
                         ws_s.cell(row=s_idx, column=c).border = border_all
                     s_idx += 1
 
-                ws_s.cell(row=s_idx, column=1, value=sr["account"]).alignment = align_left
-                ws_s.cell(row=s_idx, column=2, value=sr["sub_account"]).alignment = align_left
+                ws_s.cell(row=s_idx, column=1, value=sr.get("detail_project", "-")).alignment = align_left
+                ws_s.cell(row=s_idx, column=2, value=sr["account"]).alignment = align_left
+                ws_s.cell(row=s_idx, column=3, value=sr["sub_account"]).alignment = align_left
                 
-                c_base = ws_s.cell(row=s_idx, column=3, value=sr["base_budget"])
-                c_r1 = ws_s.cell(row=s_idx, column=4, value=sr["r1"])
-                c_r2 = ws_s.cell(row=s_idx, column=5, value=sr["r2"])
-                c_r3 = ws_s.cell(row=s_idx, column=6, value=sr["r3"])
-                c_r4 = ws_s.cell(row=s_idx, column=7, value=sr["r4"])
-                c_fin = ws_s.cell(row=s_idx, column=8, value=sr["final_budget"])
-                c_sp = ws_s.cell(row=s_idx, column=9, value=sr["spent"])
-                c_bl = ws_s.cell(row=s_idx, column=10, value=sr["balance"])
-                c_rt = ws_s.cell(row=s_idx, column=11, value=sr["exec_rate"] / 100.0)
-                c_rs = ws_s.cell(row=s_idx, column=12, value=sr["reason"])
+                c_base = ws_s.cell(row=s_idx, column=4, value=sr["base_budget"])
+                c_r1 = ws_s.cell(row=s_idx, column=5, value=sr["r1"])
+                c_r2 = ws_s.cell(row=s_idx, column=6, value=sr["r2"])
+                c_r3 = ws_s.cell(row=s_idx, column=7, value=sr["r3"])
+                c_r4 = ws_s.cell(row=s_idx, column=8, value=sr["r4"])
+                c_fin = ws_s.cell(row=s_idx, column=9, value=sr["final_budget"])
+                c_sp = ws_s.cell(row=s_idx, column=10, value=sr["spent"])
+                c_bl = ws_s.cell(row=s_idx, column=11, value=sr["balance"])
+                c_rt = ws_s.cell(row=s_idx, column=12, value=sr["exec_rate"] / 100.0)
+                c_rs = ws_s.cell(row=s_idx, column=13, value=sr["reason"])
 
                 for c in [c_base, c_fin, c_sp, c_bl]:
                     c.number_format = num_format_currency
                     c.alignment = align_right
 
                 for c_r, val in [(c_r1, sr["r1"]), (c_r2, sr["r2"]), (c_r3, sr["r3"]), (c_r4, sr["r4"])]:
-                    c_r.number_format = num_format_diff
+                    c_r.number_format = num_diff = "+#,##0;-#,##0;-"
                     c_r.alignment = align_right
                     if val > 0:
                         c_r.font = font_plus
@@ -251,18 +260,19 @@ class ExcelExporter:
             # 추경 총계 행
             ws_s.row_dimensions[s_idx].height = 24
             ws_s.cell(row=s_idx, column=1, value="합 계").alignment = align_center
-            ws_s.cell(row=s_idx, column=2, value="전체 추경 총괄").alignment = align_center
+            ws_s.cell(row=s_idx, column=2, value="전체").alignment = align_center
+            ws_s.cell(row=s_idx, column=3, value="추경 총괄").alignment = align_center
             
-            c_tb = ws_s.cell(row=s_idx, column=3, value=supp_data.get("total_base", 0))
-            c_tr1 = ws_s.cell(row=s_idx, column=4, value=supp_data.get("total_r1", 0))
-            c_tr2 = ws_s.cell(row=s_idx, column=5, value=supp_data.get("total_r2", 0))
-            c_tr3 = ws_s.cell(row=s_idx, column=6, value=supp_data.get("total_r3", 0))
-            c_tr4 = ws_s.cell(row=s_idx, column=7, value=supp_data.get("total_r4", 0))
-            c_tfin = ws_s.cell(row=s_idx, column=8, value=supp_data.get("total_final", 0))
-            c_tsp = ws_s.cell(row=s_idx, column=9, value=supp_data.get("total_spent", 0))
-            c_tbl = ws_s.cell(row=s_idx, column=10, value=supp_data.get("total_balance", 0))
-            c_trt = ws_s.cell(row=s_idx, column=11, value=supp_data.get("overall_exec_rate", 0) / 100.0)
-            ws_s.cell(row=s_idx, column=12, value="-").alignment = align_center
+            c_tb = ws_s.cell(row=s_idx, column=4, value=supp_data.get("total_base", 0))
+            c_tr1 = ws_s.cell(row=s_idx, column=5, value=supp_data.get("total_r1", 0))
+            c_tr2 = ws_s.cell(row=s_idx, column=6, value=supp_data.get("total_r2", 0))
+            c_tr3 = ws_s.cell(row=s_idx, column=7, value=supp_data.get("total_r3", 0))
+            c_tr4 = ws_s.cell(row=s_idx, column=8, value=supp_data.get("total_r4", 0))
+            c_tfin = ws_s.cell(row=s_idx, column=9, value=supp_data.get("total_final", 0))
+            c_tsp = ws_s.cell(row=s_idx, column=10, value=supp_data.get("total_spent", 0))
+            c_tbl = ws_s.cell(row=s_idx, column=11, value=supp_data.get("total_balance", 0))
+            c_trt = ws_s.cell(row=s_idx, column=12, value=supp_data.get("overall_exec_rate", 0) / 100.0)
+            ws_s.cell(row=s_idx, column=13, value="-").alignment = align_center
 
             for c in [c_tb, c_tfin, c_tsp, c_tbl]:
                 c.number_format = num_format_currency
@@ -288,8 +298,7 @@ class ExcelExporter:
         # 3. 시트: 📅 월별 지출 예산 통계표 (1~12월 매트릭스)
         # =============================================================
         ws_m = wb.create_sheet(title="월별 지출현황(1~12월)")
-        
-        ws_m.merge_cells("A1:R1")
+        ws_m.merge_cells("A1:S1")
         ws_m["A1"] = "통계목 및 세목별 월별(1월~12월) 지출 통계 현황표"
         ws_m["A1"].font = font_title
         ws_m["A1"].alignment = align_left
@@ -298,7 +307,7 @@ class ExcelExporter:
         ws_m["A2"].font = font_subtitle
 
         headers_m = [
-            "통계목", "세목 (산출기초)", "배정예산액",
+            "세부사업", "통계목", "세목 (산출기초)", "배정예산액",
             "1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월",
             "누적집행액", "현재잔액", "집행률"
         ]
@@ -320,27 +329,29 @@ class ExcelExporter:
             acc = row["account"]
             if acc != curr_m_acc:
                 curr_m_acc = acc
-                ws_m.cell(row=r_idx, column=1, value=acc).font = font_bold
+                ws_m.cell(row=r_idx, column=1, value=row.get("detail_project", "-")).font = font_bold
+                ws_m.cell(row=r_idx, column=2, value=acc).font = font_bold
                 for c in range(1, len(headers_m) + 1):
                     ws_m.cell(row=r_idx, column=c).fill = fill_account
                     ws_m.cell(row=r_idx, column=c).border = border_all
                 r_idx += 1
 
-            ws_m.cell(row=r_idx, column=1, value=row["account"]).alignment = align_left
-            ws_m.cell(row=r_idx, column=2, value=row["sub_account"]).alignment = align_left
+            ws_m.cell(row=r_idx, column=1, value=row.get("detail_project", "-")).alignment = align_left
+            ws_m.cell(row=r_idx, column=2, value=row["account"]).alignment = align_left
+            ws_m.cell(row=r_idx, column=3, value=row["sub_account"]).alignment = align_left
             
-            c_bg = ws_m.cell(row=r_idx, column=3, value=row["budget"])
+            c_bg = ws_m.cell(row=r_idx, column=4, value=row["budget"])
             c_bg.number_format = num_format_currency
             c_bg.alignment = align_right
 
             for m_i, m_val in enumerate(row["months"], start=1):
-                c_m = ws_m.cell(row=r_idx, column=3 + m_i, value=m_val)
+                c_m = ws_m.cell(row=r_idx, column=4 + m_i, value=m_val)
                 c_m.number_format = num_format_currency
                 c_m.alignment = align_right
 
-            c_tot = ws_m.cell(row=r_idx, column=16, value=row["total_spent"])
-            c_bal = ws_m.cell(row=r_idx, column=17, value=row["balance"])
-            c_rate = ws_m.cell(row=r_idx, column=18, value=row["exec_rate"] / 100.0)
+            c_tot = ws_m.cell(row=r_idx, column=17, value=row["total_spent"])
+            c_bal = ws_m.cell(row=r_idx, column=18, value=row["balance"])
+            c_rate = ws_m.cell(row=r_idx, column=19, value=row["exec_rate"] / 100.0)
 
             c_tot.number_format = num_format_currency
             c_bal.number_format = num_format_currency
@@ -360,21 +371,22 @@ class ExcelExporter:
         # 월별 총계 행
         ws_m.row_dimensions[r_idx].height = 24
         ws_m.cell(row=r_idx, column=1, value="합 계").alignment = align_center
-        ws_m.cell(row=r_idx, column=2, value="전체 월별 총괄").alignment = align_center
+        ws_m.cell(row=r_idx, column=2, value="전체").alignment = align_center
+        ws_m.cell(row=r_idx, column=3, value="월별 총괄").alignment = align_center
         
-        c_t_bg = ws_m.cell(row=r_idx, column=3, value=m_data.get("total_budget", 0))
+        c_t_bg = ws_m.cell(row=r_idx, column=4, value=m_data.get("total_budget", 0))
         c_t_bg.number_format = num_format_currency
         c_t_bg.alignment = align_right
 
         m_totals = m_data.get("monthly_totals", [0] * 12)
         for m_i, m_val in enumerate(m_totals, start=1):
-            c_tm = ws_m.cell(row=r_idx, column=3 + m_i, value=m_val)
+            c_tm = ws_m.cell(row=r_idx, column=4 + m_i, value=m_val)
             c_tm.number_format = num_format_currency
             c_tm.alignment = align_right
 
-        c_t_tot = ws_m.cell(row=r_idx, column=16, value=m_data.get("total_spent", 0))
-        c_t_bal = ws_m.cell(row=r_idx, column=17, value=m_data.get("total_balance", 0))
-        c_t_rate = ws_m.cell(row=r_idx, column=18, value=m_data.get("overall_exec_rate", 0) / 100.0)
+        c_t_tot = ws_m.cell(row=r_idx, column=17, value=m_data.get("total_spent", 0))
+        c_t_bal = ws_m.cell(row=r_idx, column=18, value=m_data.get("total_balance", 0))
+        c_t_rate = ws_m.cell(row=r_idx, column=19, value=m_data.get("overall_exec_rate", 0) / 100.0)
 
         c_t_tot.number_format = num_format_currency
         c_t_bal.number_format = num_format_currency

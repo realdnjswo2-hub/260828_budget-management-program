@@ -1,5 +1,6 @@
 """
 e호조 23310 연동 세목별 예산관리대장 및 연말(12.31) 지출·잔액 예측 데스크톱 프로그램
+- 당해년도 본예산 세출예산명세서 PDF 업로드 및 [단위-세부사업-편성목-통계목-세목] 5단계 계층 자동 인식/등록
 - 1~4회 추경(추가경정예산) 세출사업명세서 PDF 업로드, 파싱 및 검토/승인 다이얼로그
 - 1~4회 추경 변동 현황표 전용 탭 가시화
 - 엑셀 업로드 시 지출 적요 패턴 기반 자동분류 규칙 자동 추출 및 학습
@@ -19,10 +20,181 @@ from tkinter import ttk, filedialog, messagebox
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from engine.parser import EHojoParser
-from engine.pdf_parser import SupplementaryPdfParser
+from engine.pdf_parser import BaseBudgetPdfParser, SupplementaryPdfParser
 from engine.classifier import KeywordClassifier
 from engine.forecaster import Forecaster
 from engine.excel_exporter import ExcelExporter
+
+
+class BaseBudgetReviewDialog(tk.Toplevel):
+    """본예산 세출예산명세서 PDF 파싱 결과 검토 및 승인 팝업 대화상자"""
+    def __init__(self, parent, parsed_data):
+        super().__init__(parent)
+        self.parent = parent
+        self.parsed_data = parsed_data
+        self.result = None
+
+        self.title(f"📘 {parsed_data.get('year', 2026)}년도 본예산 세출예산명세서 검토 및 등록")
+        self.geometry("1060x620")
+        self.minsize(880, 500)
+        self.transient(parent)
+        self.grab_set()
+        self.configure(bg="#F4F6F9")
+
+        self._build_ui()
+        self.center_window()
+
+    def center_window(self):
+        self.update_idletasks()
+        w = self.winfo_width()
+        h = self.winfo_height()
+        x = (self.winfo_screenwidth() // 2) - (w // 2)
+        y = (self.winfo_screenheight() // 2) - (h // 2)
+        self.geometry(f"+{x}+{y}")
+
+    def _build_ui(self):
+        container = tk.Frame(self, bg="#FFFFFF", padx=16, pady=16, relief=tk.RAISED, bd=1)
+        container.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        # 상단 타이틀 바
+        top_bar = tk.Frame(container, bg="#FFFFFF")
+        top_bar.pack(fill=tk.X, side=tk.TOP, pady=(0, 10))
+
+        title_text = f"📘 {self.parsed_data.get('title', '본예산 세출예산명세서')}"
+        lbl_title = tk.Label(top_bar, text=title_text, font=("맑은 고딕", 12, "bold"), bg="#FFFFFF", fg="#1F497D")
+        lbl_title.pack(side=tk.LEFT)
+
+        total_amt = self.parsed_data.get("total_budget", 0)
+        items_cnt = len(self.parsed_data.get("items", []))
+        lbl_sum = tk.Label(top_bar, text=f"총 {items_cnt}개 세목  |  본예산 총액: {total_amt:,}원", font=("맑은 고딕", 10, "bold"), bg="#FFFFFF", fg="#2E75B6")
+        lbl_sum.pack(side=tk.RIGHT)
+
+        # 안내문
+        lbl_guide = tk.Label(
+            container,
+            text="💡 PDF 명세서에서 [단위사업 - 세부사업 - 편성목 - 통계목 - 세목(산출기초)] 및 예산액이 자동 추출되었습니다.\n확인 후 [당해년도 본예산 마스터로 확정 등록]을 누르면 예산대장 및 자동분류 규칙이 즉시 동기화됩니다.",
+            font=("맑은 고딕", 9),
+            bg="#EBF1F5",
+            fg="#1E4E79",
+            padx=10,
+            pady=6,
+            justify="left",
+            relief=tk.GROOVE
+        )
+        lbl_guide.pack(fill=tk.X, side=tk.TOP, pady=(0, 8))
+
+        # 테이블
+        cols = ("unit_project", "detail_project", "category", "account", "sub_account", "budget", "calc_basis")
+        self.tree = ttk.Treeview(container, columns=cols, show="headings", height=13)
+        self.tree.heading("unit_project", text="단위사업")
+        self.tree.heading("detail_project", text="세부사업")
+        self.tree.heading("category", text="편성목")
+        self.tree.heading("account", text="통계목")
+        self.tree.heading("sub_account", text="세목 (산출기초)")
+        self.tree.heading("budget", text="본예산액 (원)")
+        self.tree.heading("calc_basis", text="산출기초 및 내역")
+
+        self.tree.column("unit_project", width=140)
+        self.tree.column("detail_project", width=140)
+        self.tree.column("category", width=110)
+        self.tree.column("account", width=130)
+        self.tree.column("sub_account", width=150)
+        self.tree.column("budget", width=110, anchor="e")
+        self.tree.column("calc_basis", width=240)
+
+        scroll_y = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll_x = ttk.Scrollbar(container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # 데이터 추가
+        for it in self.parsed_data.get("items", []):
+            amt = int(it.get("budget", 0))
+            self.tree.insert("", tk.END, values=(
+                it.get("unit_project", ""),
+                it.get("detail_project", ""),
+                it.get("category", ""),
+                it.get("account", ""),
+                it.get("sub_account", ""),
+                f"{amt:,}",
+                it.get("calculation_basis", "")
+            ))
+
+        # 하단 버튼
+        btn_bar = tk.Frame(container, bg="#FFFFFF")
+        btn_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
+
+        btn_apply = ttk.Button(btn_bar, text="💾 당해년도 본예산 마스터로 확정 등록", command=self._on_apply, style="Primary.TButton")
+        btn_apply.pack(side=tk.LEFT, padx=6)
+
+        btn_cancel = ttk.Button(btn_bar, text="취소", command=self.destroy, style="Action.TButton")
+        btn_cancel.pack(side=tk.LEFT, padx=6)
+
+    def _on_apply(self):
+        items = self.parsed_data.get("items", [])
+        if not items:
+            messagebox.showwarning("데이터 없음", "등록할 본예산 항목이 없습니다.", parent=self)
+            return
+
+        budget_master = []
+        supp_items = []
+        inferred_rules = []
+
+        for it in items:
+            unit_p = it.get("unit_project", "기본행정 지원")
+            det_p = it.get("detail_project", "부서 기본운영경비")
+            cat = it.get("category", "물건비")
+            acc = it.get("account", "기타")
+            sub_acc = it.get("sub_account", "기타")
+            b_amt = int(it.get("budget", 0))
+            calc_str = it.get("calculation_basis", "")
+
+            # 1. Budget Master 엔트리
+            budget_master.append({
+                "policy_project": it.get("policy_project", "일반행정"),
+                "unit_project": unit_p,
+                "detail_project": det_p,
+                "category": cat,
+                "account": acc,
+                "sub_account": sub_acc,
+                "budget": b_amt,
+                "note": calc_str
+            })
+
+            # 2. Supplementary Budget 엔트리
+            supp_items.append({
+                "unit_project": unit_p,
+                "detail_project": det_p,
+                "account": acc,
+                "sub_account": sub_acc,
+                "base_budget": b_amt,
+                "supplements": {"1": 0, "2": 0, "3": 0, "4": 0},
+                "reasons": {},
+                "final_budget": b_amt
+            })
+
+            # 3. 세목명 기반 자동분류 규칙 도출
+            clean_sub = re.sub(r'[\(\)\[\]\<\>\,\.\;\:\'\"]', ' ', sub_acc).split()
+            valid_kws = [k for k in clean_sub if len(k) >= 2 and k not in ["구입", "지급", "납부", "지원", "관리", "운영"]]
+            if valid_kws:
+                cond_str = " OR ".join(valid_kws)
+                inferred_rules.append({
+                    "target_account": acc,
+                    "target_sub_account": sub_acc,
+                    "condition": cond_str,
+                    "priority": 15,
+                    "auto_generated": True
+                })
+
+        self.result = {
+            "budget_master": budget_master,
+            "supplementary_budgets": supp_items,
+            "inferred_rules": inferred_rules
+        }
+        self.destroy()
 
 
 class SupplementaryReviewDialog(tk.Toplevel):
@@ -57,7 +229,6 @@ class SupplementaryReviewDialog(tk.Toplevel):
         container = tk.Frame(self, bg="#FFFFFF", padx=16, pady=16, relief=tk.RAISED, bd=1)
         container.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
-        # 상단 차수 및 제목
         top_bar = tk.Frame(container, bg="#FFFFFF")
         top_bar.pack(fill=tk.X, side=tk.TOP, pady=(0, 10))
 
@@ -71,7 +242,6 @@ class SupplementaryReviewDialog(tk.Toplevel):
         lbl_doc_title = tk.Label(top_bar, text=self.parsed_data.get("title", "추경 세출사업명세서"), font=("맑은 고딕", 11, "bold"), bg="#FFFFFF", fg="#1F497D")
         lbl_doc_title.pack(side=tk.LEFT)
 
-        # 안내문
         lbl_guide = tk.Label(
             container,
             text="💡 PDF 문서에서 추출된 세목별 추경 증감 내역입니다. 확인 후 [예산 마스터에 최종 반영]을 누르면 예산액과 추경 이력이 갱신됩니다.",
@@ -84,7 +254,6 @@ class SupplementaryReviewDialog(tk.Toplevel):
         )
         lbl_guide.pack(fill=tk.X, side=tk.TOP, pady=(0, 8))
 
-        # 테이블
         cols = ("account", "sub_account", "change", "reason")
         self.tree = ttk.Treeview(container, columns=cols, show="headings", height=12)
         self.tree.heading("account", text="통계목")
@@ -106,7 +275,6 @@ class SupplementaryReviewDialog(tk.Toplevel):
         self.tree.tag_configure("plus_item", foreground="#0070C0", font=("맑은 고딕", 9, "bold"))
         self.tree.tag_configure("minus_item", foreground="#C00000", font=("맑은 고딕", 9, "bold"))
 
-        # 데이터 채우기
         for it in self.parsed_data.get("items", []):
             amt = int(it.get("change_amount", 0))
             amt_str = f"+{amt:,}" if amt > 0 else f"{amt:,}"
@@ -118,7 +286,6 @@ class SupplementaryReviewDialog(tk.Toplevel):
                 it.get("reason", "")
             ), tags=(tag,) if tag else ())
 
-        # 하단 버튼
         btn_bar = tk.Frame(container, bg="#FFFFFF")
         btn_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
 
@@ -129,10 +296,9 @@ class SupplementaryReviewDialog(tk.Toplevel):
         btn_cancel.pack(side=tk.LEFT, padx=6)
 
     def _on_apply(self):
-        round_idx = self.combo_round.current() + 1 # 1~4
+        round_idx = self.combo_round.current() + 1
         round_str = str(round_idx)
 
-        # 현재 추경 데이터 구조 복제
         supp_map = {}
         for s in self.current_supp_items:
             key = (s.get("account", "").strip(), s.get("sub_account", "").strip())
@@ -149,7 +315,6 @@ class SupplementaryReviewDialog(tk.Toplevel):
             change = int(it.get("change_amount", 0))
             reason = it.get("reason", "")
 
-            # 기존 세목과 매칭 시도
             matched_key = None
             for (k_acc, k_sub) in supp_map.keys():
                 if k_acc.split()[0] == acc.split()[0] and (k_sub in sub_acc or sub_acc in k_sub):
@@ -160,6 +325,8 @@ class SupplementaryReviewDialog(tk.Toplevel):
                 matched_key = (acc, sub_acc)
                 if matched_key not in supp_map:
                     supp_map[matched_key] = {
+                        "unit_project": "기본행정 지원",
+                        "detail_project": "부서 기본운영경비",
                         "account": acc,
                         "sub_account": sub_acc,
                         "base_budget": 0,
@@ -178,15 +345,15 @@ class SupplementaryReviewDialog(tk.Toplevel):
             if reason:
                 entry["reasons"][round_str] = reason
 
-            # 최종 예산 계산
             base_b = int(entry.get("base_budget", 0))
             tot_supp = sum(int(v) for v in entry["supplements"].values())
             entry["final_budget"] = base_b + tot_supp
 
-        # 예산 마스터(budget_master)에도 final_budget 반영
         updated_budget_master = []
         for (acc, sub_acc), s_data in supp_map.items():
             updated_budget_master.append({
+                "unit_project": s_data.get("unit_project", "기본행정 지원"),
+                "detail_project": s_data.get("detail_project", "부서 기본운영경비"),
                 "account": acc,
                 "sub_account": sub_acc,
                 "budget": s_data["final_budget"],
@@ -334,10 +501,9 @@ class BudgetApp(tk.Tk):
         super().__init__()
 
         self.title("e호조(23310) 세출예산 세목별 예산관리대장 및 연말 지출예측 시스템")
-        self.geometry("1420x860")
-        self.minsize(1120, 740)
+        self.geometry("1460x880")
+        self.minsize(1160, 760)
 
-        # 기본 경로 설정
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.config_dir = os.path.join(self.base_dir, "config")
         self.output_dir = os.path.join(self.base_dir, "output")
@@ -347,7 +513,6 @@ class BudgetApp(tk.Tk):
         self.last_output_file = os.path.join(self.output_dir, f"{datetime.now().year}년_세출예산_세목별_예산관리대장.xlsx")
         self.selected_file_path = tk.StringVar(value="")
 
-        # 데이터 저장소
         self.budget_master = []
         self.supplementary_budgets = []
         self.rules = []
@@ -357,19 +522,13 @@ class BudgetApp(tk.Tk):
         self.raw_transactions = []
         self.simulation_result = {}
 
-        # 분류기
         self.classifier = KeywordClassifier()
 
-        # UI 스타일 설정
         self._setup_styles()
-
-        # 데이터 로드
         self._load_configs()
-
-        # UI 위젯 빌드
         self._build_ui()
 
-        self.log("시스템 준비 완료: '▶ 업로드 파일 분석 시작' 또는 '📄 추경 PDF 업로드'를 이용하세요.", "INFO")
+        self.log("시스템 준비 완료: 1단계 [📘 본예산 명세서(PDF) 등록] 또는 3단계 [▶ e호조 분석 시작]을 이용하세요.", "INFO")
 
     def _setup_styles(self):
         self.style = ttk.Style(self)
@@ -383,14 +542,17 @@ class BudgetApp(tk.Tk):
         self.style.configure("Primary.TButton", font=("맑은 고딕", 10, "bold"), background="#1E4E79", foreground="#FFFFFF")
         self.style.map("Primary.TButton", background=[("active", "#15375B"), ("pressed", "#0F263E")])
 
+        self.style.configure("BaseBudget.TButton", font=("맑은 고딕", 10, "bold"), background="#0E6251", foreground="#FFFFFF")
+        self.style.map("BaseBudget.TButton", background=[("active", "#0B4C3E")])
+
+        self.style.configure("Purple.TButton", font=("맑은 고딕", 10, "bold"), background="#4B2C82", foreground="#FFFFFF")
+        self.style.map("Purple.TButton", background=[("active", "#361F5E")])
+
         self.style.configure("Success.TButton", font=("맑은 고딕", 10, "bold"), background="#2E75B6", foreground="#FFFFFF")
         self.style.map("Success.TButton", background=[("active", "#1F4E79")])
 
         self.style.configure("Action.TButton", font=("맑은 고딕", 9), background="#D9E1F2", foreground="#1F497D")
         self.style.map("Action.TButton", background=[("active", "#B4C6E7")])
-
-        self.style.configure("Purple.TButton", font=("맑은 고딕", 10, "bold"), background="#4B2C82", foreground="#FFFFFF")
-        self.style.map("Purple.TButton", background=[("active", "#361F5E")])
 
         self.style.configure("AI.TButton", font=("맑은 고딕", 9, "bold"), background="#4B2C82", foreground="#FFFFFF")
         self.style.map("AI.TButton", background=[("active", "#361F5E")])
@@ -412,7 +574,6 @@ class BudgetApp(tk.Tk):
         self.style.map("Budget.Treeview.Heading", background=[("active", "#1D3232")])
 
     def _load_configs(self):
-        # 1. Budget Master
         bm_path = os.path.join(self.config_dir, "budget_master.json")
         if os.path.exists(bm_path):
             with open(bm_path, "r", encoding="utf-8") as f:
@@ -420,7 +581,6 @@ class BudgetApp(tk.Tk):
         else:
             self.budget_master = []
 
-        # 2. Supplementary Budgets
         supp_path = os.path.join(self.config_dir, "supplementary_budgets.json")
         if os.path.exists(supp_path):
             with open(supp_path, "r", encoding="utf-8") as f:
@@ -428,7 +588,6 @@ class BudgetApp(tk.Tk):
         else:
             self.supplementary_budgets = []
 
-        # 3. Rules
         rules_path = os.path.join(self.config_dir, "rules.json")
         if os.path.exists(rules_path):
             with open(rules_path, "r", encoding="utf-8") as f:
@@ -439,7 +598,6 @@ class BudgetApp(tk.Tk):
             
         self.classifier.set_rules(self.rules)
 
-        # 4. Recurring Plans
         rec_path = os.path.join(self.config_dir, "recurring_plans.json")
         if os.path.exists(rec_path):
             with open(rec_path, "r", encoding="utf-8") as f:
@@ -447,7 +605,6 @@ class BudgetApp(tk.Tk):
         else:
             self.recurring_plans = []
 
-        # 5. Scheduled Plans
         sched_path = os.path.join(self.config_dir, "scheduled_plans.json")
         if os.path.exists(sched_path):
             with open(sched_path, "r", encoding="utf-8") as f:
@@ -483,26 +640,31 @@ class BudgetApp(tk.Tk):
         btn_bar = tk.Frame(top_frame, bg="#FFFFFF")
         btn_bar.pack(fill=tk.X, side=tk.TOP)
 
-        lbl_file = tk.Label(btn_bar, text="e호조 파일:", font=("맑은 고딕", 9, "bold"), bg="#FFFFFF")
-        lbl_file.pack(side=tk.LEFT, padx=(0, 4))
+        # 1단계: 📘 본예산 명세서(PDF) 등록
+        btn_base_pdf = ttk.Button(btn_bar, text="📘 1단계: 본예산 명세서(PDF) 등록", command=self._on_upload_base_budget_pdf, style="BaseBudget.TButton")
+        btn_base_pdf.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        self.entry_file = tk.Entry(btn_bar, textvariable=self.selected_file_path, width=38, font=("맑은 고딕", 9))
-        self.entry_file.pack(side=tk.LEFT, padx=(0, 4), ipady=2)
-
-        btn_browse = ttk.Button(btn_bar, text="📁 파일 찾기", command=self._on_browse_file, style="Action.TButton")
-        btn_browse.pack(side=tk.LEFT, padx=(0, 6))
-
-        btn_analyze = ttk.Button(btn_bar, text="▶ 업로드 파일 분석 시작", command=self._on_start_analysis, style="Primary.TButton")
-        btn_analyze.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
-
-        # 📄 추경 사업명세서 업로드 버튼
-        btn_upload_pdf = ttk.Button(btn_bar, text="📄 추경 사업명세서(PDF) 업로드", command=self._on_upload_supplementary_pdf, style="Purple.TButton")
+        # 2단계: 📄 추경 사업명세서(PDF) 업로드
+        btn_upload_pdf = ttk.Button(btn_bar, text="📄 2단계: 추경 명세서(PDF) 업로드", command=self._on_upload_supplementary_pdf, style="Purple.TButton")
         btn_upload_pdf.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        btn_open_excel = ttk.Button(btn_bar, text="📊 엑셀 파일 열기", command=self._on_open_excel, style="Success.TButton")
+        lbl_file = tk.Label(btn_bar, text="e호조 파일:", font=("맑은 고딕", 9, "bold"), bg="#FFFFFF")
+        lbl_file.pack(side=tk.LEFT, padx=(6, 4))
+
+        self.entry_file = tk.Entry(btn_bar, textvariable=self.selected_file_path, width=28, font=("맑은 고딕", 9))
+        self.entry_file.pack(side=tk.LEFT, padx=(0, 4), ipady=2)
+
+        btn_browse = ttk.Button(btn_bar, text="📁 찾기", command=self._on_browse_file, style="Action.TButton")
+        btn_browse.pack(side=tk.LEFT, padx=(0, 6))
+
+        # 3단계: ▶ e호조 지출 분석 시작
+        btn_analyze = ttk.Button(btn_bar, text="▶ 3단계: e호조 지출 분석 시작", command=self._on_start_analysis, style="Primary.TButton")
+        btn_analyze.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
+
+        btn_open_excel = ttk.Button(btn_bar, text="📊 엑셀 열기", command=self._on_open_excel, style="Success.TButton")
         btn_open_excel.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        btn_open_folder = ttk.Button(btn_bar, text="📂 저장 폴더 열기", command=self._on_open_folder, style="Action.TButton")
+        btn_open_folder = ttk.Button(btn_bar, text="📂 저장 폴더", command=self._on_open_folder, style="Action.TButton")
         btn_open_folder.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
         btn_sample = ttk.Button(btn_bar, text="💡 샘플 파일 생성", command=self._on_generate_sample, style="Action.TButton")
@@ -514,7 +676,7 @@ class BudgetApp(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=(8, 4))
 
-        # 탭 1: 세목별 예산관리대장 (서식 뷰)
+        # 탭 1: 세목별 예산관리대장
         self.tab_ledger = tk.Frame(self.notebook, bg="#FFFFFF")
         self.notebook.add(self.tab_ledger, text="  📋 세목별 예산관리대장 (연말예측)  ")
         self._build_ledger_tab()
@@ -524,7 +686,7 @@ class BudgetApp(tk.Tk):
         self.notebook.add(self.tab_supp, text="  📊 추경 예산 변동 현황표 (1~4회)  ")
         self._build_supp_tab()
 
-        # 탭 3: 📅 월별 지출 예산 통계표 (1~12월 매트릭스)
+        # 탭 3: 📅 월별 지출 예산 통계표 (1~12월)
         self.tab_monthly = tk.Frame(self.notebook, bg="#FFFFFF")
         self.notebook.add(self.tab_monthly, text="  📅 월별 지출 예산 통계표 (1~12월)  ")
         self._build_monthly_tab()
@@ -534,7 +696,7 @@ class BudgetApp(tk.Tk):
         self.notebook.add(self.tab_transactions, text="  📝 e호조 지출 수집 내역  ")
         self._build_transactions_tab()
 
-        # 탭 5: 12.31 연말 지출예측 시뮬레이터
+        # 탭 5: 12.31 연말 계획 설정
         self.tab_forecast = tk.Frame(self.notebook, bg="#FFFFFF")
         self.notebook.add(self.tab_forecast, text="  🔮 연말 계획 설정  ")
         self._build_forecast_tab()
@@ -571,7 +733,7 @@ class BudgetApp(tk.Tk):
         self.log_text.tag_config("ERROR", foreground="#F44747")
 
     # -------------------------------------------------------------------------
-    # 탭 1: 세목별 예산관리대장 (서식 뷰) 빌드
+    # 탭 1: 세목별 예산관리대장
     # -------------------------------------------------------------------------
     def _build_ledger_tab(self):
         info_frame = tk.Frame(self.tab_ledger, bg="#EEF2F7", padx=10, pady=6)
@@ -587,24 +749,26 @@ class BudgetApp(tk.Tk):
         self.lbl_ledger_summary.pack(side=tk.LEFT)
 
         cols = (
-            "account", "sub_account", "budget", "actual_spent", "current_balance",
+            "detail_project", "category", "account", "sub_account", "budget", "actual_spent", "current_balance",
             "exec_rate", "remaining_recurring", "scheduled_spent", "forecast_total_spent",
             "forecast_balance", "status"
         )
         self.tree_ledger = ttk.Treeview(self.tab_ledger, columns=cols, show="headings", style="Budget.Treeview")
 
         headings = [
-            ("account", "통계목", 130, "w"),
-            ("sub_account", "세목 (산출기초)", 160, "w"),
-            ("budget", "배정예산액 (A)", 110, "e"),
-            ("actual_spent", "기집행액 (B)", 105, "e"),
-            ("current_balance", "현재잔액 (A-B)", 105, "e"),
-            ("exec_rate", "집행률", 75, "center"),
-            ("remaining_recurring", "잔여정기지출", 95, "e"),
-            ("scheduled_spent", "하반기예정액", 95, "e"),
-            ("forecast_total_spent", "12.31 예상지출(C)", 115, "e"),
-            ("forecast_balance", "12.31 예상잔액(A-C)", 115, "e"),
-            ("status", "상태판정", 100, "center")
+            ("detail_project", "세부사업", 130, "w"),
+            ("category", "편성목", 100, "w"),
+            ("account", "통계목", 125, "w"),
+            ("sub_account", "세목 (산출기초)", 150, "w"),
+            ("budget", "배정예산액 (A)", 105, "e"),
+            ("actual_spent", "기집행액 (B)", 100, "e"),
+            ("current_balance", "현재잔액 (A-B)", 100, "e"),
+            ("exec_rate", "집행률", 70, "center"),
+            ("remaining_recurring", "잔여정기지출", 90, "e"),
+            ("scheduled_spent", "하반기예정액", 90, "e"),
+            ("forecast_total_spent", "12.31 예상지출(C)", 110, "e"),
+            ("forecast_balance", "12.31 예상잔액(A-C)", 110, "e"),
+            ("status", "상태판정", 95, "center")
         ]
 
         for col_id, col_text, col_w, col_align in headings:
@@ -625,7 +789,7 @@ class BudgetApp(tk.Tk):
         self.tree_ledger.tag_configure("warning_row", foreground="#ED7D31")
 
     # -------------------------------------------------------------------------
-    # 탭 2: 📊 추경 예산 변동 현황표 (1~4회) 빌드
+    # 탭 2: 📊 추경 예산 변동 현황표 (1~4회)
     # -------------------------------------------------------------------------
     def _build_supp_tab(self):
         info_frame = tk.Frame(self.tab_supp, bg="#F3EEF9", padx=10, pady=6)
@@ -640,29 +804,27 @@ class BudgetApp(tk.Tk):
         )
         self.lbl_supp_summary.pack(side=tk.LEFT)
 
-        btn_quick_pdf = ttk.Button(info_frame, text="📄 추경 PDF 불러오기", command=self._on_upload_supplementary_pdf, style="Purple.TButton")
-        btn_quick_pdf.pack(side=tk.RIGHT)
-
         cols = (
-            "account", "sub_account", "base_budget",
+            "detail_project", "account", "sub_account", "base_budget",
             "r1", "r2", "r3", "r4",
             "final_budget", "spent", "balance", "exec_rate", "reason"
         )
         self.tree_supp = ttk.Treeview(self.tab_supp, columns=cols, show="headings", style="Budget.Treeview")
 
         s_headings = [
-            ("account", "통계목", 125, "w"),
-            ("sub_account", "세목 (산출기초)", 145, "w"),
-            ("base_budget", "당초 본예산", 100, "e"),
-            ("r1", "1회 추경(±)", 90, "e"),
-            ("r2", "2회 추경(±)", 90, "e"),
-            ("r3", "3회 추경(±)", 90, "e"),
-            ("r4", "4회 추경(±)", 90, "e"),
-            ("final_budget", "최종 확정예산", 105, "e"),
-            ("spent", "기집행액", 95, "e"),
-            ("balance", "현재잔액", 95, "e"),
-            ("exec_rate", "집행률", 65, "center"),
-            ("reason", "증감 사유 및 내역", 240, "w")
+            ("detail_project", "세부사업", 120, "w"),
+            ("account", "통계목", 120, "w"),
+            ("sub_account", "세목 (산출기초)", 140, "w"),
+            ("base_budget", "당초 본예산", 95, "e"),
+            ("r1", "1회 추경(±)", 85, "e"),
+            ("r2", "2회 추경(±)", 85, "e"),
+            ("r3", "3회 추경(±)", 85, "e"),
+            ("r4", "4회 추경(±)", 85, "e"),
+            ("final_budget", "최종 확정예산", 100, "e"),
+            ("spent", "기집행액", 90, "e"),
+            ("balance", "현재잔액", 90, "e"),
+            ("exec_rate", "집행률", 60, "center"),
+            ("reason", "증감 사유 및 내역", 230, "w")
         ]
 
         for col_id, col_text, col_w, col_align in s_headings:
@@ -679,11 +841,9 @@ class BudgetApp(tk.Tk):
 
         self.tree_supp.tag_configure("header_row", background="#E8EEF5", font=("맑은 고딕", 9, "bold"))
         self.tree_supp.tag_configure("total_row", background="#D9E1F2", font=("맑은 고딕", 9, "bold"))
-        self.tree_supp.tag_configure("plus_item", foreground="#0070C0")
-        self.tree_supp.tag_configure("minus_item", foreground="#C00000")
 
     # -------------------------------------------------------------------------
-    # 탭 3: 📅 월별 지출 예산 통계표 빌드
+    # 탭 3: 📅 월별 지출 예산 통계표
     # -------------------------------------------------------------------------
     def _build_monthly_tab(self):
         info_frame = tk.Frame(self.tab_monthly, bg="#F2F4F7", padx=10, pady=6)
@@ -691,7 +851,7 @@ class BudgetApp(tk.Tk):
 
         self.lbl_monthly_summary = tk.Label(
             info_frame,
-            text="📅 통계목 및 세목별 월별(1월~12월) 지출 추이 및 누적 현황표",
+            text="📅 세부사업 및 통계목/세목별 월별(1월~12월) 지출 추이 및 누적 현황표",
             font=("맑은 고딕", 10, "bold"),
             bg="#F2F4F7",
             fg="#1E4E79"
@@ -699,31 +859,32 @@ class BudgetApp(tk.Tk):
         self.lbl_monthly_summary.pack(side=tk.LEFT)
 
         cols = (
-            "account", "sub_account", "budget",
+            "detail_project", "account", "sub_account", "budget",
             "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12",
             "total_spent", "balance", "exec_rate"
         )
         self.tree_monthly = ttk.Treeview(self.tab_monthly, columns=cols, show="headings", style="Budget.Treeview")
 
         m_headings = [
-            ("account", "통계목", 125, "w"),
-            ("sub_account", "세목 (산출기초)", 145, "w"),
-            ("budget", "배정예산액", 95, "e"),
-            ("m1", "1월", 68, "e"),
-            ("m2", "2월", 68, "e"),
-            ("m3", "3월", 68, "e"),
-            ("m4", "4월", 68, "e"),
-            ("m5", "5월", 68, "e"),
-            ("m6", "6월", 68, "e"),
-            ("m7", "7월", 68, "e"),
-            ("m8", "8월", 68, "e"),
-            ("m9", "9월", 68, "e"),
-            ("m10", "10월", 68, "e"),
-            ("m11", "11월", 68, "e"),
-            ("m12", "12월", 68, "e"),
-            ("total_spent", "누적집행액", 95, "e"),
-            ("balance", "현재잔액", 95, "e"),
-            ("exec_rate", "집행률", 65, "center")
+            ("detail_project", "세부사업", 120, "w"),
+            ("account", "통계목", 120, "w"),
+            ("sub_account", "세목 (산출기초)", 140, "w"),
+            ("budget", "배정예산액", 90, "e"),
+            ("m1", "1월", 65, "e"),
+            ("m2", "2월", 65, "e"),
+            ("m3", "3월", 65, "e"),
+            ("m4", "4월", 65, "e"),
+            ("m5", "5월", 65, "e"),
+            ("m6", "6월", 65, "e"),
+            ("m7", "7월", 65, "e"),
+            ("m8", "8월", 65, "e"),
+            ("m9", "9월", 65, "e"),
+            ("m10", "10월", 65, "e"),
+            ("m11", "11월", 65, "e"),
+            ("m12", "12월", 65, "e"),
+            ("total_spent", "누적집행액", 90, "e"),
+            ("balance", "현재잔액", 90, "e"),
+            ("exec_rate", "집행률", 60, "center")
         ]
 
         for col_id, col_text, col_w, col_align in m_headings:
@@ -742,7 +903,7 @@ class BudgetApp(tk.Tk):
         self.tree_monthly.tag_configure("total_row", background="#D9E1F2", font=("맑은 고딕", 9, "bold"))
 
     # -------------------------------------------------------------------------
-    # 탭 4: e호조 수집 지출내역 빌드
+    # 탭 4: e호조 수집 지출내역
     # -------------------------------------------------------------------------
     def _build_transactions_tab(self):
         top_filter = tk.Frame(self.tab_transactions, bg="#FFFFFF", padx=10, pady=6)
@@ -792,7 +953,7 @@ class BudgetApp(tk.Tk):
         self.tree_tx.tag_configure("unclassified", foreground="#ED7D31", font=("맑은 고딕", 9, "bold"))
 
     # -------------------------------------------------------------------------
-    # 탭 5: 연말 예측 시뮬레이터 계획 설정
+    # 탭 5: 연말 계획 설정
     # -------------------------------------------------------------------------
     def _build_forecast_tab(self):
         container = tk.Frame(self.tab_forecast, bg="#FFFFFF", padx=10, pady=10)
@@ -934,21 +1095,72 @@ class BudgetApp(tk.Tk):
 
     def _on_generate_sample(self):
         sample_path = os.path.join(self.base_dir, "sample", "e호조_23310_샘플.xlsx")
-        from sample_generator import generate_sample_file, generate_sample_supplementary_txt
+        from sample_generator import generate_sample_file, generate_sample_base_budget_txt, generate_sample_supplementary_txt
         generate_sample_file(sample_path)
+        generate_sample_base_budget_txt(os.path.join(self.base_dir, "sample", "2026년도_본예산_세출예산명세서_샘플.txt"))
         generate_sample_supplementary_txt(os.path.join(self.base_dir, "sample", "제1회_추경_세출사업명세서_샘플.txt"))
         self.selected_file_path.set(sample_path)
-        self.log(f"테스트용 e호조 샘플 엑셀 및 제1회 추경 샘플 파일이 생성되었습니다.", "SUCCESS")
-        messagebox.showinfo("샘플 생성 완료", "테스트용 e호조 23310 지출 엑셀 및\n제1회 추경 사업명세서 샘플 파일이 'sample' 폴더에 생성되었습니다.")
+        self.log("테스트용 본예산 명세서, 추경 명세서 및 e호조 엑셀 샘플 파일이 생성되었습니다.", "SUCCESS")
+        messagebox.showinfo("샘플 생성 완료", "테스트용 [본예산 명세서], [추경 명세서], [e호조 엑셀] 샘플 파일이\n'sample' 폴더에 생성되었습니다.")
+
+    def _on_upload_base_budget_pdf(self):
+        """1단계: 당해년도 본예산 세출예산명세서 PDF/TXT 업로드 및 파싱"""
+        file_path = filedialog.askopenfilename(
+            title="당해년도 본예산 세출예산명세서 PDF/TXT 선택",
+            filetypes=[("PDF/TXT 파일 (*.pdf;*.txt)", "*.pdf;*.txt"), ("PDF 파일 (*.pdf)", "*.pdf"), ("텍스트 파일 (*.txt)", "*.txt"), ("모든 파일", "*.*")]
+        )
+        if not file_path:
+            sample_txt = os.path.join(self.base_dir, "sample", "2026년도_본예산_세출예산명세서_샘플.txt")
+            if os.path.exists(sample_txt):
+                file_path = sample_txt
+                self.log("선택된 파일이 없어 테스트용 본예산 샘플 명세서를 불러옵니다.", "WARN")
+            else:
+                return
+
+        self.log(f"📘 본예산 세출예산명세서 분석 시작: {os.path.basename(file_path)}", "INFO")
+        try:
+            parsed = BaseBudgetPdfParser.parse_base_budget_pdf(file_path)
+            self.log(f"본예산 파싱 완료: {parsed.get('title')} (추출된 세목: {len(parsed.get('items', []))}건, 총액: {parsed.get('total_budget', 0):,}원)", "SUCCESS")
+
+            dialog = BaseBudgetReviewDialog(self, parsed_data=parsed)
+            self.wait_window(dialog)
+
+            if dialog.result:
+                self.budget_master = dialog.result["budget_master"]
+                self.supplementary_budgets = dialog.result["supplementary_budgets"]
+                
+                # 신규 규칙 자동 추가
+                new_rules = dialog.result.get("inferred_rules", [])
+                existing_conds = {r.get("condition", "") for r in self.rules}
+                for nr in new_rules:
+                    if nr.get("condition") not in existing_conds:
+                        self.rules.append(nr)
+
+                self._save_configs()
+                self.classifier.set_rules(self.rules)
+                self._render_rules_tab_data()
+
+                self.log(f"🎉 {parsed.get('year', 2026)}년도 본예산 마스터 ({len(self.budget_master)}개 세목)가 성공적으로 확정 등록되었습니다!", "SUCCESS")
+                self._reclassify_and_refresh()
+                messagebox.showinfo(
+                    "본예산 등록 완료",
+                    f"{parsed.get('year', 2026)}년도 본예산 마스터가 성공적으로 등록되었습니다!\n\n"
+                    f"• 등록 세목: {len(self.budget_master)}개\n"
+                    f"• 본예산 총액: {parsed.get('total_budget', 0):,}원\n"
+                    f"• 세목 기반 자동분류 규칙이 동기화되었습니다."
+                )
+
+        except Exception as e:
+            self.log(f"본예산 파일 파싱 오류: {str(e)}", "ERROR")
+            messagebox.showerror("파싱 오류", f"본예산 명세서 분석 중 오류가 발생했습니다:\n{str(e)}")
 
     def _on_upload_supplementary_pdf(self):
-        """추경 세출사업명세서 PDF/TXT 업로드 및 파싱"""
+        """2단계: 추경 세출사업명세서 PDF/TXT 업로드 및 파싱"""
         file_path = filedialog.askopenfilename(
             title="추경 세출사업명세서 PDF/TXT 파일 선택",
             filetypes=[("PDF/TXT 파일 (*.pdf;*.txt)", "*.pdf;*.txt"), ("PDF 파일 (*.pdf)", "*.pdf"), ("텍스트 파일 (*.txt)", "*.txt"), ("모든 파일", "*.*")]
         )
         if not file_path:
-            # 기본 샘플 파일 확인
             sample_txt = os.path.join(self.base_dir, "sample", "제1회_추경_세출사업명세서_샘플.txt")
             if os.path.exists(sample_txt):
                 file_path = sample_txt
@@ -961,7 +1173,6 @@ class BudgetApp(tk.Tk):
             parsed = SupplementaryPdfParser.parse_supplementary_pdf(file_path)
             self.log(f"추경 명세서 파싱 완료: {parsed.get('title')} (추출된 항목: {len(parsed.get('items', []))}건)", "SUCCESS")
             
-            # 검토 및 승인 대화상자 실행
             dialog = SupplementaryReviewDialog(
                 self,
                 parsed_data=parsed,
@@ -1121,10 +1332,8 @@ class BudgetApp(tk.Tk):
             messagebox.showinfo("알림", "기존 규칙으로 모든 지출 패턴이 커버되고 있어 추가할 신규 규칙이 없습니다.")
 
     def _reclassify_and_refresh(self):
-        """규칙 또는 추경 변경 시 현재 로드된 지출 건을 즉시 다시 분류하고 모든 화면을 실시간 갱신합니다."""
         source = self.raw_transactions if self.raw_transactions else self.transactions
         if not source:
-            # 지출 건이 없더라도 예산대장 및 추경 화면은 렌더링
             self.simulation_result = Forecaster.simulate(
                 budget_items=self.budget_master,
                 transactions=[],
@@ -1162,7 +1371,6 @@ class BudgetApp(tk.Tk):
 
         self.transactions = classified_txs
 
-        # 12.31 연말 시뮬레이션, 월별 매트릭스 및 추경 집계
         self.simulation_result = Forecaster.simulate(
             budget_items=self.budget_master,
             transactions=self.transactions,
@@ -1189,8 +1397,9 @@ class BudgetApp(tk.Tk):
         if not file_path:
             sample_path = os.path.join(self.base_dir, "sample", "e호조_23310_샘플.xlsx")
             if not os.path.exists(sample_path):
-                from sample_generator import generate_sample_file, generate_sample_supplementary_txt
+                from sample_generator import generate_sample_file, generate_sample_base_budget_txt, generate_sample_supplementary_txt
                 generate_sample_file(sample_path)
+                generate_sample_base_budget_txt(os.path.join(self.base_dir, "sample", "2026년도_본예산_세출예산명세서_샘플.txt"))
                 generate_sample_supplementary_txt(os.path.join(self.base_dir, "sample", "제1회_추경_세출사업명세서_샘플.txt"))
             self.selected_file_path.set(sample_path)
             file_path = sample_path
@@ -1200,7 +1409,7 @@ class BudgetApp(tk.Tk):
             messagebox.showerror("오류", f"파일을 찾을 수 없습니다:\n{file_path}")
             return
 
-        self.log(f"분석 시작: {file_path}", "INFO")
+        self.log(f"3단계 e호조 지출 분석 시작: {file_path}", "INFO")
 
         try:
             raw_txs, parse_msg = EHojoParser.parse_file(file_path)
@@ -1255,7 +1464,11 @@ class BudgetApp(tk.Tk):
             acc = it["account"]
             if acc != current_acc:
                 current_acc = acc
-                self.tree_ledger.insert("", tk.END, values=(acc, "──────────────", "", "", "", "", "", "", "", "", ""), tags=("header_row",))
+                self.tree_ledger.insert("", tk.END, values=(
+                    it.get("detail_project", "-"),
+                    it.get("category", "-"),
+                    acc, "──────────────", "", "", "", "", "", "", "", "", ""
+                ), tags=("header_row",))
 
             tag = ()
             if "초과" in it["status"]:
@@ -1264,6 +1477,8 @@ class BudgetApp(tk.Tk):
                 tag = ("warning_row",)
 
             self.tree_ledger.insert("", tk.END, values=(
+                it.get("detail_project", "-"),
+                it.get("category", "-"),
                 it["account"],
                 it["sub_account"],
                 f"{it['budget']:,}",
@@ -1278,8 +1493,7 @@ class BudgetApp(tk.Tk):
             ), tags=tag)
 
         self.tree_ledger.insert("", tk.END, values=(
-            "합 계",
-            "전체 총괄",
+            "합 계", "전체", "총괄", "전체 세목",
             f"{sim['total_budget']:,}",
             f"{sim['total_spent']:,}",
             f"{sim['current_balance']:,}",
@@ -1307,6 +1521,7 @@ class BudgetApp(tk.Tk):
             if acc != current_acc:
                 current_acc = acc
                 self.tree_supp.insert("", tk.END, values=(
+                    sr.get("detail_project", "-"),
                     acc, "──────────────", "", "", "", "", "", "", "", "", "", ""
                 ), tags=("header_row",))
 
@@ -1318,6 +1533,7 @@ class BudgetApp(tk.Tk):
                 return "-"
 
             self.tree_supp.insert("", tk.END, values=(
+                sr.get("detail_project", "-"),
                 sr["account"],
                 sr["sub_account"],
                 f"{sr['base_budget']:,}",
@@ -1340,8 +1556,7 @@ class BudgetApp(tk.Tk):
             return "-"
 
         self.tree_supp.insert("", tk.END, values=(
-            "합 계",
-            "전체 추경 총괄",
+            "합 계", "전체", "전체 추경 총괄",
             f"{supp_data.get('total_base', 0):,}",
             fmt_diff_tot(supp_data.get("total_r1", 0)),
             fmt_diff_tot(supp_data.get("total_r2", 0)),
@@ -1370,12 +1585,14 @@ class BudgetApp(tk.Tk):
             if acc != current_acc:
                 current_acc = acc
                 self.tree_monthly.insert("", tk.END, values=(
+                    r.get("detail_project", "-"),
                     acc, "──────────────", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""
                 ), tags=("header_row",))
 
             m_vals = [f"{v:,}" if v > 0 else "-" for v in r["months"]]
 
             self.tree_monthly.insert("", tk.END, values=(
+                r.get("detail_project", "-"),
                 r["account"],
                 r["sub_account"],
                 f"{r['budget']:,}",
@@ -1387,8 +1604,7 @@ class BudgetApp(tk.Tk):
 
         m_tot_vals = [f"{v:,}" if v > 0 else "-" for v in m_data.get("monthly_totals", [0] * 12)]
         self.tree_monthly.insert("", tk.END, values=(
-            "합 계",
-            "전체 월별 총괄",
+            "합 계", "전체", "전체 월별 총괄",
             f"{m_data.get('total_budget', 0):,}",
             *m_tot_vals,
             f"{m_data.get('total_spent', 0):,}",

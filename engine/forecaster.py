@@ -1,14 +1,14 @@
 """
 12.31 연말 지출 및 불용액 예측 엔진 (Year-End Expenditure & Balance Forecaster)
-- 정기 고정비(월정액 * 잔여월수) 자동 계산
-- 하반기 집행예정 사업비 반영
+- 단위사업 - 세부사업 - 편성목 - 통계목 - 세목 계층별 집계
+- 정기 고정비(월정액 * 잔여월수) 및 하반기 예정액 계산
 - 12.31 기준 예상 지출총액 및 예상 잔액(불용액) 시뮬레이션
 - 1월 ~ 12월 월별 지출 예산 통계 매트릭스 집계
 - 1~4회 추경(추가경정예산) 변동 현황 및 본예산 비교 집계
 """
 
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 
 class Forecaster:
@@ -75,6 +75,9 @@ class Forecaster:
             total_spent += row_sum
 
             matrix_rows.append({
+                "unit_project": b.get("unit_project", "기본행정 지원"),
+                "detail_project": b.get("detail_project", "부서 기본운영경비"),
+                "category": b.get("category", "물건비"),
                 "account": acc,
                 "sub_account": sub_acc,
                 "budget": budget,
@@ -91,6 +94,9 @@ class Forecaster:
                     monthly_totals[i] += m_values[i]
                 total_spent += row_sum
                 matrix_rows.append({
+                    "unit_project": "-",
+                    "detail_project": "-",
+                    "category": "-",
                     "account": acc,
                     "sub_account": sub_acc,
                     "budget": 0,
@@ -117,7 +123,6 @@ class Forecaster:
         supplementary_items: List[Dict[str, Any]],
         spent_map: Dict[Tuple[str, str], int]
     ) -> Dict[str, Any]:
-        """1~4회 추경 변동 현황표 집계"""
         rows = []
         tot_base = 0
         tot_r1 = 0
@@ -154,6 +159,8 @@ class Forecaster:
             tot_spent += spent
 
             rows.append({
+                "unit_project": item.get("unit_project", "기본행정 지원"),
+                "detail_project": item.get("detail_project", "부서 기본운영경비"),
                 "account": acc,
                 "sub_account": sub_acc,
                 "base_budget": base_b,
@@ -193,7 +200,6 @@ class Forecaster:
     ) -> Dict[str, Any]:
         remaining_months = cls.calculate_remaining_months(base_date)
 
-        # 1. 세목별 기집행액 집계
         spent_map = {}
         for tx in transactions:
             acc = tx.get("account", "기타")
@@ -201,7 +207,6 @@ class Forecaster:
             key = (acc, sub_acc)
             spent_map[key] = spent_map.get(key, 0) + int(tx.get("amount", 0))
 
-        # 2. 세목별 정기지출(월정액) 집계
         recurring_map = {}
         if recurring_plans:
             for r in recurring_plans:
@@ -209,7 +214,6 @@ class Forecaster:
                 monthly = int(r.get("monthly_amount", 0))
                 recurring_map[key] = recurring_map.get(key, 0) + monthly
 
-        # 3. 세목별 집행예정 사업비 집계
         scheduled_map = {}
         if scheduled_plans:
             for s in scheduled_plans:
@@ -217,16 +221,18 @@ class Forecaster:
                 amt = int(s.get("amount", 0))
                 scheduled_map[key] = scheduled_map.get(key, 0) + amt
 
-        # 4. 세목별 시뮬레이션 결과 생성
         summary_items = []
         total_budget = 0
         total_spent = 0
         total_forecast_spent = 0
         total_forecast_balance = 0
 
-        account_groups = {}
+        detail_groups = {}
 
         for b in budget_items:
+            unit_p = b.get("unit_project", "기본행정 지원")
+            det_p = b.get("detail_project", "부서 기본운영경비")
+            cat = b.get("category", "물건비")
             acc = b.get("account", "기타")
             sub_acc = b.get("sub_account", "기타")
             budget = int(b.get("budget", 0))
@@ -255,6 +261,9 @@ class Forecaster:
                 status_badge = "success"
 
             item_data = {
+                "unit_project": unit_p,
+                "detail_project": det_p,
+                "category": cat,
                 "account": acc,
                 "sub_account": sub_acc,
                 "budget": budget,
@@ -274,18 +283,18 @@ class Forecaster:
 
             summary_items.append(item_data)
 
-            if acc not in account_groups:
-                account_groups[acc] = {
-                    "account": acc,
+            if det_p not in detail_groups:
+                detail_groups[det_p] = {
+                    "detail_project": det_p,
                     "budget": 0,
                     "actual_spent": 0,
                     "forecast_total_spent": 0,
                     "forecast_balance": 0
                 }
-            account_groups[acc]["budget"] += budget
-            account_groups[acc]["actual_spent"] += actual_spent
-            account_groups[acc]["forecast_total_spent"] += forecast_total_spent
-            account_groups[acc]["forecast_balance"] += forecast_balance
+            detail_groups[det_p]["budget"] += budget
+            detail_groups[det_p]["actual_spent"] += actual_spent
+            detail_groups[det_p]["forecast_total_spent"] += forecast_total_spent
+            detail_groups[det_p]["forecast_balance"] += forecast_balance
 
             total_budget += budget
             total_spent += actual_spent
@@ -301,8 +310,6 @@ class Forecaster:
         overall_forecast_exec_rate = round((total_forecast_spent / total_budget * 100), 1) if total_budget > 0 else 0.0
 
         monthly_matrix = cls.calculate_monthly_matrix(budget_items, transactions)
-        
-        # 추경 변동 현황표 생성
         supp_matrix = {}
         if supplementary_items:
             supp_matrix = cls.calculate_supplementary_matrix(supplementary_items, spent_map)
@@ -310,7 +317,7 @@ class Forecaster:
         return {
             "remaining_months": remaining_months,
             "items": summary_items,
-            "account_groups": list(account_groups.values()),
+            "detail_groups": list(detail_groups.values()),
             "total_budget": total_budget,
             "total_spent": total_spent,
             "current_balance": total_budget - total_spent,
