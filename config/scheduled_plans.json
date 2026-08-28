@@ -1,0 +1,23 @@
+[
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "현수막 및 홍보인쇄물",
+    "amount": 1500000,
+    "month": 11,
+    "description": "연말 주요 시정 성과보고서 책자 및 홍보 리플릿 인쇄"
+  },
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "피복비",
+    "amount": 1200000,
+    "month": 10,
+    "description": "동절기 현장 단속용 방한복 추가 구입"
+  },
+  {
+    "account": "202-01 국내여비",
+    "sub_account": "중앙부처 방문 관외여비",
+    "amount": 1500000,
+    "month": 11,
+    "description": "2027년도 국비 확보를 위한 국회 및 기재부 방문 출장"
+  }
+]

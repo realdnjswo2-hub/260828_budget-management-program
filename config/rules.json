@@ -1,0 +1,80 @@
+[
+  {
+    "target_account": "201-01 사무관리비",
+    "target_sub_account": "복사용지 및 사무용품비",
+    "condition": "(토너 OR 잉크 OR 복사용지 OR A4 OR 사무용품 OR 필기구 OR 스테이플러) AND NOT 현수막",
+    "priority": 10
+  },
+  {
+    "target_account": "201-01 사무관리비",
+    "target_sub_account": "간담회 다과비",
+    "condition": "다과 OR 음료 OR 간담회 OR 차류 OR 다과용품 OR 회의용",
+    "priority": 10
+  },
+  {
+    "target_account": "201-01 사무관리비",
+    "target_sub_account": "신문 및 정기간행물 구독료",
+    "condition": "신문 OR 일간지 OR 정기간행물 OR 구독료 OR 신문대금",
+    "priority": 10
+  },
+  {
+    "target_account": "201-01 사무관리비",
+    "target_sub_account": "직원 급량비",
+    "condition": "급량비 OR 매식비 OR 야근식대 OR 특근 OR 비상근무",
+    "priority": 10
+  },
+  {
+    "target_account": "201-01 사무관리비",
+    "target_sub_account": "현수막 및 홍보인쇄물",
+    "condition": "현수막 OR 배너 OR 인쇄물 OR 리플릿 OR 책자 OR 포스터 OR 홍보물",
+    "priority": 10
+  },
+  {
+    "target_account": "201-01 사무관리비",
+    "target_sub_account": "피복비",
+    "condition": "피복비 OR 근무복 OR 안전화 OR 방한복 OR 조끼",
+    "priority": 10
+  },
+  {
+    "target_account": "201-02 공공운영비",
+    "target_sub_account": "청사 전기 및 가스요금",
+    "condition": "전기요금 OR 한전 OR 전기료 OR 도시가스 OR 가스요금 OR 난방비",
+    "priority": 10
+  },
+  {
+    "target_account": "201-02 공공운영비",
+    "target_sub_account": "통신 및 전산회선료",
+    "condition": "통신요금 OR 회선료 OR 전용회선 OR 인터넷 OR 전화요금 OR KT OR SKT",
+    "priority": 10
+  },
+  {
+    "target_account": "201-02 공공운영비",
+    "target_sub_account": "정수기 및 복사기 렌탈료",
+    "condition": "정수기 OR 렌탈료 OR 임차료 OR 복사기임차 OR 코웨이 OR 청호나이스",
+    "priority": 10
+  },
+  {
+    "target_account": "201-02 공공운영비",
+    "target_sub_account": "공용차량 유지관리비",
+    "condition": "차량 OR 유류비 OR 주유대 OR 엔진오일 OR 정비 OR 차량보험 OR 세차",
+    "priority": 10
+  },
+  {
+    "target_account": "202-01 국내여비",
+    "target_sub_account": "시정업무추진 관내여비",
+    "condition": "관내 OR 시내 OR 관내출장 OR 출장여비 AND NOT (세종 OR 서울 OR 국회 OR 관외)",
+    "priority": 10
+  },
+  {
+    "target_account": "202-01 국내여비",
+    "target_sub_account": "중앙부처 방문 관외여비",
+    "condition": "관외 OR 세종 OR 서울 OR 대전 OR 국회 OR KTX OR 관외출장",
+    "priority": 10
+  },
+  {
+    "target_account": "203-04 부서운영업무추진비",
+    "target_sub_account": "부서운영 간담회 및 격려비",
+    "condition": "부서운영 OR 업무추진비 OR 부서간담회 OR 직원격려 OR 시책추진",
+    "priority": 10
+  }
+]

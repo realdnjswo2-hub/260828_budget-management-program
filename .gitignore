@@ -1,0 +1,30 @@
+# OS generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables & secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Build & Output
+dist/
+build/
+output/
+*.log
+tmp/
+temp/

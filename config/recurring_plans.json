@@ -1,0 +1,26 @@
+[
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "신문 및 정기간행물 구독료",
+    "monthly_amount": 100000,
+    "description": "일간지 5종 정기구독료 (월 10만원)"
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "청사 전기 및 가스요금",
+    "monthly_amount": 1100000,
+    "description": "청사 한전 전기요금 및 가스비 (월평균 약 110만원)"
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "통신 및 전산회선료",
+    "monthly_amount": 300000,
+    "description": "KT 행정전화 및 전산망 회선료 (월 30만원)"
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "정수기 및 복사기 렌탈료",
+    "monthly_amount": 200000,
+    "description": "부서 정수기 2대 및 복합기 임차료 (월 20만원)"
+  }
+]

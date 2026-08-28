@@ -1,0 +1,181 @@
+[
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "복사용지 및 사무용품비",
+    "base_budget": 5000000,
+    "supplements": {
+      "1": 1000000,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {
+      "1": "하반기 민원서류 발급 증가에 따른 복사용지 추가 구입"
+    },
+    "final_budget": 6000000
+  },
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "간담회 다과비",
+    "base_budget": 2000000,
+    "supplements": {
+      "1": -300000,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {
+      "1": "상반기 회의 축소에 따른 불용 예상액 삭감(감액 추경)"
+    },
+    "final_budget": 1700000
+  },
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "신문 및 정기간행물 구독료",
+    "base_budget": 1200000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 1200000
+  },
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "직원 급량비",
+    "base_budget": 3500000,
+    "supplements": {
+      "1": 500000,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {
+      "1": "여름철 풍수해 대비 재난안전대책본부 비상근무 매식비 증액"
+    },
+    "final_budget": 4000000
+  },
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "현수막 및 홍보인쇄물",
+    "base_budget": 4000000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 4000000
+  },
+  {
+    "account": "201-01 사무관리비",
+    "sub_account": "피복비",
+    "base_budget": 2400000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 2400000
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "청사 전기 및 가스요금",
+    "base_budget": 15000000,
+    "supplements": {
+      "1": 2000000,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {
+      "1": "여름철 폭염 및 한전 전기요금 단가 인상분 반영"
+    },
+    "final_budget": 17000000
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "통신 및 전산회선료",
+    "base_budget": 3600000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 3600000
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "정수기 및 복사기 렌탈료",
+    "base_budget": 2400000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 2400000
+  },
+  {
+    "account": "201-02 공공운영비",
+    "sub_account": "공용차량 유지관리비",
+    "base_budget": 4500000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 4500000
+  },
+  {
+    "account": "202-01 국내여비",
+    "sub_account": "시정업무추진 관내여비",
+    "base_budget": 8000000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 8000000
+  },
+  {
+    "account": "202-01 국내여비",
+    "sub_account": "중앙부처 방문 관외여비",
+    "base_budget": 5000000,
+    "supplements": {
+      "1": 1000000,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {
+      "1": "2027년도 국비 확보를 위한 국회 및 정부부처 협의 출장비 추가"
+    },
+    "final_budget": 6000000
+  },
+  {
+    "account": "203-04 부서운영업무추진비",
+    "sub_account": "부서운영 간담회 및 격려비",
+    "base_budget": 4800000,
+    "supplements": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "reasons": {},
+    "final_budget": 4800000
+  }
+]
