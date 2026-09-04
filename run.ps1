@@ -49,8 +49,8 @@ if (-not $pythonPath) {
 
 Write-Host "[확인] Python 경로: $pythonPath" -ForegroundColor Green
 
-Write-Host "필수 패키지(openpyxl) 확인 중..." -ForegroundColor Gray
-& $pythonPath -m pip install openpyxl --break-system-packages --quiet
+Write-Host "필수 패키지(openpyxl, pypdf) 확인 중..." -ForegroundColor Gray
+& $pythonPath -m pip install openpyxl pypdf --break-system-packages --quiet
 
 Write-Host "프로그램 창을 엽니다..." -ForegroundColor Green
 & $pythonPath main.py

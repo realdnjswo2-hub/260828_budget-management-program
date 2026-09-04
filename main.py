@@ -66,13 +66,14 @@ class BaseBudgetReviewDialog(tk.Toplevel):
 
         total_amt = self.parsed_data.get("total_budget", 0)
         items_cnt = len(self.parsed_data.get("items", []))
-        lbl_sum = tk.Label(top_bar, text=f"총 {items_cnt}개 세목  |  본예산 총액: {total_amt:,}원", font=("맑은 고딕", 10, "bold"), bg="#FFFFFF", fg="#2E75B6")
+        import_level = self.parsed_data.get("import_level", "세목")
+        lbl_sum = tk.Label(top_bar, text=f"총 {items_cnt}개 {import_level}  |  본예산 총액: {total_amt:,}원", font=("맑은 고딕", 10, "bold"), bg="#FFFFFF", fg="#2E75B6")
         lbl_sum.pack(side=tk.RIGHT)
 
         # 안내문
         lbl_guide = tk.Label(
             container,
-            text="💡 PDF 명세서에서 [단위사업 - 세부사업 - 편성목 - 통계목 - 세목(산출기초)] 및 예산액이 자동 추출되었습니다.\n확인 후 [당해년도 본예산 마스터로 확정 등록]을 누르면 예산대장 및 자동분류 규칙이 즉시 동기화됩니다.",
+            text="💡 PDF 명세서에서 [단위사업 - 세부사업 - 편성목 - 통계목]과 각 단계의 예산액이 자동 추출되었습니다.\n확인 후 [당해년도 본예산 마스터로 확정 등록]을 누르면 예산대장에 즉시 반영됩니다.",
             font=("맑은 고딕", 9),
             bg="#EBF1F5",
             fg="#1E4E79",
@@ -83,32 +84,49 @@ class BaseBudgetReviewDialog(tk.Toplevel):
         )
         lbl_guide.pack(fill=tk.X, side=tk.TOP, pady=(0, 8))
 
+        # 하단 작업 버튼은 표보다 먼저 공간을 확보해야 작은 화면이나
+        # 확대 배율에서도 표 영역에 밀려 창 밖으로 사라지지 않는다.
+        btn_bar = tk.Frame(container, bg="#FFFFFF")
+        btn_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
+
         # 테이블
-        cols = ("unit_project", "detail_project", "category", "account", "sub_account", "budget", "calc_basis")
-        self.tree = ttk.Treeview(container, columns=cols, show="headings", height=13)
+        table_frame = tk.Frame(container, bg="#FFFFFF")
+        table_frame.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+
+        cols = (
+            "unit_project", "detail_project", "detail_budget", "category",
+            "category_budget", "account", "sub_account", "budget", "calc_basis"
+        )
+        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=13)
         self.tree.heading("unit_project", text="단위사업")
         self.tree.heading("detail_project", text="세부사업")
+        self.tree.heading("detail_budget", text="세부사업 예산액")
         self.tree.heading("category", text="편성목")
+        self.tree.heading("category_budget", text="편성목 예산액")
         self.tree.heading("account", text="통계목")
-        self.tree.heading("sub_account", text="세목 (산출기초)")
+        self.tree.heading("sub_account", text="관리 단위" if import_level == "통계목" else "세목 (산출기초)")
         self.tree.heading("budget", text="본예산액 (원)")
         self.tree.heading("calc_basis", text="산출기초 및 내역")
 
         self.tree.column("unit_project", width=140)
         self.tree.column("detail_project", width=140)
+        self.tree.column("detail_budget", width=110, anchor="e")
         self.tree.column("category", width=110)
+        self.tree.column("category_budget", width=110, anchor="e")
         self.tree.column("account", width=130)
         self.tree.column("sub_account", width=150)
         self.tree.column("budget", width=110, anchor="e")
         self.tree.column("calc_basis", width=240)
 
-        scroll_y = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree.yview)
-        scroll_x = ttk.Scrollbar(container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        scroll_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
 
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
 
         # 데이터 추가
         for it in self.parsed_data.get("items", []):
@@ -116,16 +134,14 @@ class BaseBudgetReviewDialog(tk.Toplevel):
             self.tree.insert("", tk.END, values=(
                 it.get("unit_project", ""),
                 it.get("detail_project", ""),
+                f"{int(it.get('detail_project_budget', 0)):,}",
                 it.get("category", ""),
+                f"{int(it.get('category_budget', 0)):,}",
                 it.get("account", ""),
                 it.get("sub_account", ""),
                 f"{amt:,}",
                 it.get("calculation_basis", "")
             ))
-
-        # 하단 버튼
-        btn_bar = tk.Frame(container, bg="#FFFFFF")
-        btn_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
 
         btn_apply = ttk.Button(btn_bar, text="💾 당해년도 본예산 마스터로 확정 등록", command=self._on_apply, style="Primary.TButton")
         btn_apply.pack(side=tk.LEFT, padx=6)
@@ -154,29 +170,40 @@ class BaseBudgetReviewDialog(tk.Toplevel):
 
             # 1. Budget Master 엔트리
             budget_master.append({
+                "department": it.get("department", ""),
+                "policy_project": it.get("policy_project", "일반행정"),
+                "unit_project": unit_p,
+                "detail_project": det_p,
+                "detail_project_budget": int(it.get("detail_project_budget", 0)),
+                "category": cat,
+                "category_budget": int(it.get("category_budget", 0)),
+                "account": acc,
+                "sub_account": sub_acc,
+                "budget": b_amt,
+                "budget_level": it.get("budget_level", "sub_account"),
+                "note": calc_str
+            })
+
+            # 2. Supplementary Budget 엔트리
+            supp_items.append({
+                "department": it.get("department", ""),
                 "policy_project": it.get("policy_project", "일반행정"),
                 "unit_project": unit_p,
                 "detail_project": det_p,
                 "category": cat,
                 "account": acc,
                 "sub_account": sub_acc,
-                "budget": b_amt,
-                "note": calc_str
-            })
-
-            # 2. Supplementary Budget 엔트리
-            supp_items.append({
-                "unit_project": unit_p,
-                "detail_project": det_p,
-                "account": acc,
-                "sub_account": sub_acc,
                 "base_budget": b_amt,
+                "budget_level": it.get("budget_level", "sub_account"),
                 "supplements": {"1": 0, "2": 0, "3": 0, "4": 0},
                 "reasons": {},
                 "final_budget": b_amt
             })
 
             # 3. 세목명 기반 자동분류 규칙 도출
+            if it.get("budget_level") == "account":
+                continue
+
             clean_sub = re.sub(r'[\(\)\[\]\<\>\,\.\;\:\'\"]', ' ', sub_acc).split()
             valid_kws = [k for k in clean_sub if len(k) >= 2 and k not in ["구입", "지급", "납부", "지원", "관리", "운영"]]
             if valid_kws:
@@ -208,8 +235,8 @@ class SupplementaryReviewDialog(tk.Toplevel):
         self.result = None
 
         self.title("📄 추경 세출사업명세서 파싱 결과 검토 및 예산 반영")
-        self.geometry("960x600")
-        self.minsize(800, 480)
+        self.geometry("1180x620")
+        self.minsize(980, 500)
         self.transient(parent)
         self.grab_set()
         self.configure(bg="#F4F6F9")
@@ -233,7 +260,7 @@ class SupplementaryReviewDialog(tk.Toplevel):
         top_bar.pack(fill=tk.X, side=tk.TOP, pady=(0, 10))
 
         tk.Label(top_bar, text="추경 차수 선택:", font=("맑은 고딕", 10, "bold"), bg="#FFFFFF").pack(side=tk.LEFT, padx=(0, 6))
-        self.combo_round = ttk.Combobox(top_bar, values=["제1회 추경", "제2회 추경", "제3회 추경", "제4회 추경"], font=("맑은 고딕", 9, "bold"), width=12)
+        self.combo_round = ttk.Combobox(top_bar, values=["제1회 추경", "제2회 추경", "제3회 추경", "제4회 추경"], font=("맑은 고딕", 9, "bold"), width=12, state="readonly")
         self.combo_round.pack(side=tk.LEFT, padx=(0, 12))
         
         detected_round = self.parsed_data.get("round", 1)
@@ -244,7 +271,7 @@ class SupplementaryReviewDialog(tk.Toplevel):
 
         lbl_guide = tk.Label(
             container,
-            text="💡 PDF 문서에서 추출된 세목별 추경 증감 내역입니다. 확인 후 [예산 마스터에 최종 반영]을 누르면 예산액과 추경 이력이 갱신됩니다.",
+            text="💡 PDF에서 [세부사업 - 편성목 - 통계목]별 기정액과 추경후 예산액을 인식했습니다.\n본예산과 일치하는 통계목만 검증하여 증감액을 반영합니다.",
             font=("맑은 고딕", 9),
             bg="#EBF1F5",
             fg="#1E4E79",
@@ -254,23 +281,39 @@ class SupplementaryReviewDialog(tk.Toplevel):
         )
         lbl_guide.pack(fill=tk.X, side=tk.TOP, pady=(0, 8))
 
-        cols = ("account", "sub_account", "change", "reason")
-        self.tree = ttk.Treeview(container, columns=cols, show="headings", height=12)
+        btn_bar = tk.Frame(container, bg="#FFFFFF")
+        btn_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
+
+        table_frame = tk.Frame(container, bg="#FFFFFF")
+        table_frame.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+
+        cols = ("detail_project", "category", "account", "previous", "change", "revised", "reason")
+        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=12)
+        self.tree.heading("detail_project", text="세부사업")
+        self.tree.heading("category", text="편성목")
         self.tree.heading("account", text="통계목")
-        self.tree.heading("sub_account", text="세목 (산출기초)")
+        self.tree.heading("previous", text="기정액 (원)")
         self.tree.heading("change", text="추경 증감액 (±원)")
+        self.tree.heading("revised", text="추경후 예산액 (원)")
         self.tree.heading("reason", text="증감 사유 및 산출근거")
 
-        self.tree.column("account", width=140)
-        self.tree.column("sub_account", width=180)
+        self.tree.column("detail_project", width=150)
+        self.tree.column("category", width=130)
+        self.tree.column("account", width=190)
+        self.tree.column("previous", width=125, anchor="e")
         self.tree.column("change", width=130, anchor="e")
-        self.tree.column("reason", width=380)
+        self.tree.column("revised", width=135, anchor="e")
+        self.tree.column("reason", width=280)
 
-        scroll_y = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll_y.set)
+        scroll_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
 
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
 
         self.tree.tag_configure("plus_item", foreground="#0070C0", font=("맑은 고딕", 9, "bold"))
         self.tree.tag_configure("minus_item", foreground="#C00000", font=("맑은 고딕", 9, "bold"))
@@ -280,14 +323,14 @@ class SupplementaryReviewDialog(tk.Toplevel):
             amt_str = f"+{amt:,}" if amt > 0 else f"{amt:,}"
             tag = "plus_item" if amt > 0 else ("minus_item" if amt < 0 else "")
             self.tree.insert("", tk.END, values=(
+                it.get("detail_project", ""),
+                it.get("category", ""),
                 it.get("account"),
-                it.get("sub_account"),
+                f"{int(it.get('prev_budget', 0)):,}",
                 amt_str,
+                f"{int(it.get('revised_budget', 0)):,}",
                 it.get("reason", "")
             ), tags=(tag,) if tag else ())
-
-        btn_bar = tk.Frame(container, bg="#FFFFFF")
-        btn_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(12, 0))
 
         btn_apply = ttk.Button(btn_bar, text="💾 예산 마스터 및 추경 이력에 최종 반영", command=self._on_apply, style="Primary.TButton")
         btn_apply.pack(side=tk.LEFT, padx=6)
@@ -299,73 +342,144 @@ class SupplementaryReviewDialog(tk.Toplevel):
         round_idx = self.combo_round.current() + 1
         round_str = str(round_idx)
 
-        supp_map = {}
-        for s in self.current_supp_items:
-            key = (s.get("account", "").strip(), s.get("sub_account", "").strip())
-            supp_map[key] = dict(s)
-
         items_to_apply = self.parsed_data.get("items", [])
         if not items_to_apply:
             messagebox.showwarning("항목 없음", "반영할 추경 내역이 없습니다.", parent=self)
             return
 
-        for it in items_to_apply:
-            acc = it.get("account", "").strip()
-            sub_acc = it.get("sub_account", "").strip()
-            change = int(it.get("change_amount", 0))
-            reason = it.get("reason", "")
+        supp_entries = []
+        for source in self.current_supp_items:
+            copied = dict(source)
+            copied["supplements"] = dict(source.get("supplements", {}))
+            copied["reasons"] = dict(source.get("reasons", {}))
+            supp_entries.append(copied)
 
-            matched_key = None
-            for (k_acc, k_sub) in supp_map.keys():
-                if k_acc.split()[0] == acc.split()[0] and (k_sub in sub_acc or sub_acc in k_sub):
-                    matched_key = (k_acc, k_sub)
-                    break
+        matches = []
+        unmatched = []
+        ambiguous = []
+        mismatched_previous = []
 
-            if not matched_key:
-                matched_key = (acc, sub_acc)
-                if matched_key not in supp_map:
-                    supp_map[matched_key] = {
-                        "unit_project": "기본행정 지원",
-                        "detail_project": "부서 기본운영경비",
-                        "account": acc,
-                        "sub_account": sub_acc,
-                        "base_budget": 0,
-                        "supplements": {"1": 0, "2": 0, "3": 0, "4": 0},
-                        "reasons": {},
-                        "final_budget": 0
-                    }
+        for incoming in items_to_apply:
+            candidates = [
+                idx for idx, existing in enumerate(supp_entries)
+                if self._items_match(existing, incoming)
+            ]
+            if not candidates:
+                unmatched.append(incoming)
+                continue
+            if len(candidates) > 1:
+                ambiguous.append(incoming)
+                continue
 
-            entry = supp_map[matched_key]
-            if "supplements" not in entry:
-                entry["supplements"] = {"1": 0, "2": 0, "3": 0, "4": 0}
-            if "reasons" not in entry:
-                entry["reasons"] = {}
+            entry = supp_entries[candidates[0]]
+            current_final = int(entry.get("final_budget", entry.get("base_budget", 0)))
+            pdf_previous = int(incoming.get("prev_budget", 0))
+            if incoming.get("budget_level") == "account" and pdf_previous != current_final:
+                mismatched_previous.append((incoming, current_final))
+                continue
+            matches.append((candidates[0], incoming))
 
-            entry["supplements"][round_str] = change
-            if reason:
-                entry["reasons"][round_str] = reason
+        if unmatched or ambiguous or mismatched_previous:
+            problems = []
+            if unmatched:
+                names = ", ".join(it.get("account", "-") for it in unmatched[:5])
+                problems.append(f"• 본예산에서 찾지 못한 통계목: {names}")
+            if ambiguous:
+                names = ", ".join(it.get("account", "-") for it in ambiguous[:5])
+                problems.append(f"• 본예산 항목이 중복되어 구분할 수 없음: {names}")
+            if mismatched_previous:
+                names = ", ".join(
+                    f"{it.get('account', '-')} (PDF 기정 {int(it.get('prev_budget', 0)):,}원 / 현재 {current:,}원)"
+                    for it, current in mismatched_previous[:5]
+                )
+                problems.append(f"• 기정액 불일치: {names}")
+            messagebox.showerror(
+                "추경 반영 불가",
+                "확정된 본예산 및 기존 추경 이력과 PDF가 일치하지 않습니다.\n"
+                "이전 차수부터 순서대로 등록했는지 확인해 주세요.\n\n" + "\n".join(problems),
+                parent=self,
+            )
+            return
 
-            base_b = int(entry.get("base_budget", 0))
-            tot_supp = sum(int(v) for v in entry["supplements"].values())
-            entry["final_budget"] = base_b + tot_supp
+        for entry_idx, incoming in matches:
+            entry = supp_entries[entry_idx]
+            entry.setdefault("supplements", {"1": 0, "2": 0, "3": 0, "4": 0})
+            entry.setdefault("reasons", {})
+            for idx in ("1", "2", "3", "4"):
+                entry["supplements"].setdefault(idx, 0)
 
-        updated_budget_master = []
-        for (acc, sub_acc), s_data in supp_map.items():
-            updated_budget_master.append({
-                "unit_project": s_data.get("unit_project", "기본행정 지원"),
-                "detail_project": s_data.get("detail_project", "부서 기본운영경비"),
-                "account": acc,
-                "sub_account": sub_acc,
-                "budget": s_data["final_budget"],
-                "note": f"제{round_idx}회 추경 반영 (최종: {s_data['final_budget']:,}원)"
-            })
+            entry["supplements"][round_str] = int(incoming.get("change_amount", 0))
+            entry["reasons"][round_str] = incoming.get("reason", f"제{round_idx}회 추경")
+            entry["final_budget"] = int(entry.get("base_budget", 0)) + sum(
+                int(value) for value in entry["supplements"].values()
+            )
+
+        updated_budget_master = [dict(item) for item in self.current_budget_master]
+        for budget_item in updated_budget_master:
+            candidate_entries = [
+                entry for entry in supp_entries if self._items_match(budget_item, entry)
+            ]
+            if len(candidate_entries) == 1:
+                entry = candidate_entries[0]
+                budget_item["budget"] = int(entry.get("final_budget", 0))
+                if entry.get("supplements", {}).get(round_str, 0):
+                    budget_item["note"] = (
+                        f"제{round_idx}회 추경 반영 "
+                        f"(증감: {int(entry['supplements'][round_str]):+,}원, "
+                        f"최종: {int(entry.get('final_budget', 0)):,}원)"
+                    )
+
+        # 통계목 변경 후 상위 계층 예산액도 현재 통계목 합계로 동기화한다.
+        detail_totals = {}
+        category_totals = {}
+        for item in updated_budget_master:
+            detail_key = (
+                item.get("policy_project", ""), item.get("unit_project", ""),
+                item.get("detail_project", ""),
+            )
+            category_key = detail_key + (item.get("category", ""),)
+            detail_totals[detail_key] = detail_totals.get(detail_key, 0) + int(item.get("budget", 0))
+            category_totals[category_key] = category_totals.get(category_key, 0) + int(item.get("budget", 0))
+        for item in updated_budget_master:
+            detail_key = (
+                item.get("policy_project", ""), item.get("unit_project", ""),
+                item.get("detail_project", ""),
+            )
+            category_key = detail_key + (item.get("category", ""),)
+            item["detail_project_budget"] = detail_totals[detail_key]
+            item["category_budget"] = category_totals[category_key]
 
         self.result = {
             "round": round_idx,
-            "updated_supp_items": list(supp_map.values()),
+            "updated_supp_items": supp_entries,
             "updated_budget_master": updated_budget_master
         }
         self.destroy()
+
+    @staticmethod
+    def _code(value):
+        value = str(value or "").strip()
+        return value.split()[0] if value else ""
+
+    @classmethod
+    def _items_match(cls, existing, incoming):
+        if cls._code(existing.get("account")) != cls._code(incoming.get("account")):
+            return False
+
+        if incoming.get("budget_level") == "account" or existing.get("budget_level") == "account":
+            incoming_detail = str(incoming.get("detail_project", "")).strip()
+            existing_detail = str(existing.get("detail_project", "")).strip()
+            if incoming_detail and existing_detail and incoming_detail != existing_detail:
+                return False
+            incoming_category = cls._code(incoming.get("category"))
+            existing_category = cls._code(existing.get("category"))
+            if incoming_category and existing_category and incoming_category != existing_category:
+                return False
+            return True
+
+        incoming_sub = str(incoming.get("sub_account", "")).strip()
+        existing_sub = str(existing.get("sub_account", "")).strip()
+        return incoming_sub == existing_sub or incoming_sub in existing_sub or existing_sub in incoming_sub
 
 
 class RuleEditDialog(tk.Toplevel):
@@ -504,7 +618,11 @@ class BudgetApp(tk.Tk):
         self.geometry("1460x880")
         self.minsize(1160, 760)
 
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        source_dir = os.path.dirname(os.path.abspath(__file__))
+        self.resource_dir = getattr(sys, "_MEIPASS", source_dir)
+        # One-file EXE의 임시 압축해제 폴더가 아니라 EXE 옆에 설정을
+        # 저장해야 본예산 확정 상태와 추경 이력이 다음 실행에도 유지된다.
+        self.base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else source_dir
         self.config_dir = os.path.join(self.base_dir, "config")
         self.output_dir = os.path.join(self.base_dir, "output")
         os.makedirs(self.config_dir, exist_ok=True)
@@ -521,6 +639,9 @@ class BudgetApp(tk.Tk):
         self.transactions = []
         self.raw_transactions = []
         self.simulation_result = {}
+        self.base_budget_confirmed = False
+        self.base_budget_year = None
+        self.base_budget_source = ""
 
         self.classifier = KeywordClassifier()
 
@@ -581,6 +702,17 @@ class BudgetApp(tk.Tk):
         else:
             self.budget_master = []
 
+        state_path = os.path.join(self.config_dir, "budget_state.json")
+        if os.path.exists(state_path):
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            self.base_budget_confirmed = bool(state.get("base_budget_confirmed", False))
+            self.base_budget_year = state.get("base_budget_year")
+            self.base_budget_source = state.get("base_budget_source", "")
+        else:
+            # 이전 버전에서 저장한 예산 마스터와의 호환성 유지
+            self.base_budget_confirmed = bool(self.budget_master)
+
         supp_path = os.path.join(self.config_dir, "supplementary_budgets.json")
         if os.path.exists(supp_path):
             with open(supp_path, "r", encoding="utf-8") as f:
@@ -623,6 +755,12 @@ class BudgetApp(tk.Tk):
             json.dump(self.recurring_plans, f, ensure_ascii=False, indent=2)
         with open(os.path.join(self.config_dir, "scheduled_plans.json"), "w", encoding="utf-8") as f:
             json.dump(self.scheduled_plans, f, ensure_ascii=False, indent=2)
+        with open(os.path.join(self.config_dir, "budget_state.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "base_budget_confirmed": self.base_budget_confirmed,
+                "base_budget_year": self.base_budget_year,
+                "base_budget_source": self.base_budget_source,
+            }, f, ensure_ascii=False, indent=2)
 
     def _build_ui(self):
         top_frame = tk.Frame(self, bg="#FFFFFF", padx=14, pady=10, relief=tk.RAISED, bd=1)
@@ -1128,6 +1266,9 @@ class BudgetApp(tk.Tk):
             if dialog.result:
                 self.budget_master = dialog.result["budget_master"]
                 self.supplementary_budgets = dialog.result["supplementary_budgets"]
+                self.base_budget_confirmed = True
+                self.base_budget_year = parsed.get("year")
+                self.base_budget_source = os.path.basename(file_path)
                 
                 # 신규 규칙 자동 추가
                 new_rules = dialog.result.get("inferred_rules", [])
@@ -1140,12 +1281,13 @@ class BudgetApp(tk.Tk):
                 self.classifier.set_rules(self.rules)
                 self._render_rules_tab_data()
 
-                self.log(f"🎉 {parsed.get('year', 2026)}년도 본예산 마스터 ({len(self.budget_master)}개 세목)가 성공적으로 확정 등록되었습니다!", "SUCCESS")
+                imported_level = parsed.get("import_level", "세목")
+                self.log(f"🎉 {parsed.get('year', 2026)}년도 본예산 마스터 ({len(self.budget_master)}개 {imported_level})가 성공적으로 확정 등록되었습니다!", "SUCCESS")
                 self._reclassify_and_refresh()
                 messagebox.showinfo(
                     "본예산 등록 완료",
                     f"{parsed.get('year', 2026)}년도 본예산 마스터가 성공적으로 등록되었습니다!\n\n"
-                    f"• 등록 세목: {len(self.budget_master)}개\n"
+                    f"• 등록 {imported_level}: {len(self.budget_master)}개\n"
                     f"• 본예산 총액: {parsed.get('total_budget', 0):,}원\n"
                     f"• 세목 기반 자동분류 규칙이 동기화되었습니다."
                 )
@@ -1156,6 +1298,15 @@ class BudgetApp(tk.Tk):
 
     def _on_upload_supplementary_pdf(self):
         """2단계: 추경 세출사업명세서 PDF/TXT 업로드 및 파싱"""
+        if not self.base_budget_confirmed or not self.budget_master or not self.supplementary_budgets:
+            self.log("추경 등록 차단: 확정된 당해년도 본예산이 없습니다.", "WARN")
+            messagebox.showwarning(
+                "본예산 확정 필요",
+                "추경 PDF를 등록하려면 먼저 1단계에서 당해년도 본예산 PDF를\n"
+                "업로드하고 [당해년도 본예산 마스터로 확정 등록]을 완료해야 합니다."
+            )
+            return
+
         file_path = filedialog.askopenfilename(
             title="추경 세출사업명세서 PDF/TXT 파일 선택",
             filetypes=[("PDF/TXT 파일 (*.pdf;*.txt)", "*.pdf;*.txt"), ("PDF 파일 (*.pdf)", "*.pdf"), ("텍스트 파일 (*.txt)", "*.txt"), ("모든 파일", "*.*")]
@@ -1171,6 +1322,10 @@ class BudgetApp(tk.Tk):
         self.log(f"📄 추경 사업명세서 분석 시작: {os.path.basename(file_path)}", "INFO")
         try:
             parsed = SupplementaryPdfParser.parse_supplementary_pdf(file_path)
+            if self.base_budget_year and parsed.get("year") and int(self.base_budget_year) != int(parsed["year"]):
+                raise ValueError(
+                    f"본예산 연도({self.base_budget_year})와 추경 PDF 연도({parsed['year']})가 다릅니다."
+                )
             self.log(f"추경 명세서 파싱 완료: {parsed.get('title')} (추출된 항목: {len(parsed.get('items', []))}건)", "SUCCESS")
             
             dialog = SupplementaryReviewDialog(

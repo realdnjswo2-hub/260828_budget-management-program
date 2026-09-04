@@ -12,6 +12,19 @@ from typing import List, Dict, Any, Tuple, Optional
 class BaseBudgetPdfParser:
     """당해년도 본예산 세출예산명세서 PDF 파서"""
 
+    DEFAULT_POLICY = "일반행정 운영"
+    DEFAULT_UNIT = "기본행정 지원 및 청사관리"
+    DEFAULT_DETAIL = "부서 기본운영경비 지원"
+
+    # 지방재정 세출예산사업명세서의 표 본문 한 행:
+    # 항목명 / 예산액 / 전년도 예산액 / 비교증감
+    _BUDGET_ROW_PATTERN = re.compile(
+        r"^(?P<label>.+?)\s+"
+        r"(?P<current>[△▲+\-]?[\d,]+)\s+"
+        r"(?P<previous>[△▲+\-]?[\d,]+)\s+"
+        r"(?P<change>[△▲+\-]?[\d,]+)\s*$"
+    )
+
     @classmethod
     def _clean_amount_str(cls, val: str) -> int:
         if not val:
@@ -51,16 +64,145 @@ class BaseBudgetPdfParser:
         }
         """
         text = SupplementaryPdfParser.extract_text_from_pdf(pdf_path)
+        text = text.replace("\u318d", "·").replace("\ufeff", "")
 
-        # 연도 감지
-        year_match = re.search(r'(\d{4})\s*년도?\s*(?:당초|본)?\s*세출예산', text)
+        year_match = re.search(r'(\d{4})\s*년도?\s*(?:당초|본)?\s*(?:세출)?예산', text)
         year = int(year_match.group(1)) if year_match else 2026
 
+        # e호조/지방재정 출력물은 편성목(3자리)과 통계목(2자리)을
+        # 서로 다른 행으로 표시한다. 기존 산출기초형 문서와 형식이
+        # 다르므로 먼저 표준 계층형 보고서인지 감지한다.
+        has_category_rows = re.search(
+            r"(?m)^\s*\d{3}\s+.+?\s+[\d,]+\s+[\d,]+\s+[△▲+\-]?[\d,]+\s*$",
+            text,
+        )
+        has_statistic_rows = re.search(
+            r"(?m)^\s*\d{2}\s+.+?\s+[\d,]+\s+[\d,]+\s+[△▲+\-]?[\d,]+\s*$",
+            text,
+        )
+        if has_category_rows and has_statistic_rows:
+            return cls._parse_hierarchical_report(text, year)
+
+        return cls._parse_legacy_basis_report(text, year)
+
+    @classmethod
+    def _parse_hierarchical_report(cls, text: str, year: int) -> Dict[str, Any]:
+        """세출예산사업명세서 표에서 세부사업/편성목/통계목 예산을 추출한다."""
+        items: List[Dict[str, Any]] = []
+        department = ""
+        current_policy = cls.DEFAULT_POLICY
+        current_unit = cls.DEFAULT_UNIT
+        current_detail = cls.DEFAULT_DETAIL
+        current_detail_budget = 0
+        current_category = ""
+        current_category_budget = 0
+
+        # 코드 없는 합계 행은 부서/정책/단위/세부사업이 모두 같은 모양이다.
+        # 편성목 행 바로 앞의 마지막 코드 없는 합계 행이 해당 세부사업이다.
+        pending_hierarchy_rows: List[Tuple[str, int]] = []
+
+        for raw_line in text.splitlines():
+            line = re.sub(r"\s+", " ", raw_line).strip()
+            if not line:
+                continue
+
+            if line.startswith("부서:"):
+                department = line.split(":", 1)[1].strip()
+                continue
+            if line.startswith("정책:"):
+                current_policy = line.split(":", 1)[1].strip()
+                continue
+            if line.startswith("단위:"):
+                unit_value = line.split(":", 1)[1].strip()
+                current_unit = re.sub(r"\s*\(\s*단위\s*:\s*천원\s*\)\s*$", "", unit_value).strip()
+                continue
+
+            if cls._is_report_noise(line):
+                continue
+
+            row_match = cls._BUDGET_ROW_PATTERN.match(line)
+            if not row_match:
+                continue
+
+            label = row_match.group("label").strip()
+            current_amount = cls._clean_amount_str(row_match.group("current")) * 1000
+
+            category_match = re.match(r"^(\d{3})\s+(.+)$", label)
+            if category_match:
+                if pending_hierarchy_rows:
+                    # 한 세부사업이 시작될 때 정책/단위/세부사업 합계 행이
+                    # 함께 나타날 수 있다. 끝에서부터 계층을 판정하면
+                    # 페이지 중간의 단위사업 전환도 정확히 반영된다.
+                    if len(pending_hierarchy_rows) >= 3:
+                        current_policy = pending_hierarchy_rows[-3][0]
+                        current_unit = pending_hierarchy_rows[-2][0]
+                    elif len(pending_hierarchy_rows) == 2:
+                        current_unit = pending_hierarchy_rows[-2][0]
+                    current_detail, current_detail_budget = pending_hierarchy_rows[-1]
+                    pending_hierarchy_rows.clear()
+                current_category = f"{category_match.group(1)} {category_match.group(2).strip()}"
+                current_category_budget = current_amount
+                continue
+
+            statistic_match = re.match(r"^(\d{2})\s+(.+)$", label)
+            if statistic_match and current_category:
+                category_code = current_category.split()[0]
+                statistic_code = statistic_match.group(1)
+                statistic_name = statistic_match.group(2).strip()
+                account = f"{category_code}-{statistic_code} {statistic_name}"
+                items.append({
+                    "department": department,
+                    "policy_project": current_policy,
+                    "unit_project": current_unit,
+                    "detail_project": current_detail,
+                    "detail_project_budget": current_detail_budget,
+                    "category": current_category,
+                    "category_budget": current_category_budget,
+                    "account": account,
+                    "sub_account": "통계목 전체",
+                    "budget": current_amount,
+                    "budget_level": "account",
+                    "calculation_basis": line,
+                })
+                continue
+
+            # 숫자로 시작하는 산출기초(예: 4급, 5급)는 계층 행이 아니다.
+            if not re.match(r"^\d", label):
+                pending_hierarchy_rows.append((label, current_amount))
+
+        if not items:
+            raise ValueError(
+                "세출예산사업명세서에서 편성목(3자리)과 통계목(2자리) 예산을 찾지 못했습니다."
+            )
+
+        return {
+            "year": year,
+            "title": f"{year}년도 본예산 세출예산사업명세서",
+            "department": department,
+            "items": items,
+            "total_budget": sum(it["budget"] for it in items),
+            "import_level": "통계목",
+        }
+
+    @staticmethod
+    def _is_report_noise(line: str) -> bool:
+        """페이지 머리글/꼬리글 및 산출식 열이 예산 행으로 오인되지 않게 한다."""
+        if re.fullmatch(r"-\s*\d+\s*-", line):
+            return True
+        noise_phrases = (
+            "부서·정책·단위", "세 출 예 산 사 업 명 세 서", "예산액 전년도",
+            "예산액 비교증감", "(단위:천원)",
+        )
+        return any(phrase in line for phrase in noise_phrases)
+
+    @classmethod
+    def _parse_legacy_basis_report(cls, text: str, year: int) -> Dict[str, Any]:
+        """기존 산출기초 중심 PDF/TXT 형식과의 하위 호환 파서."""
         items = []
 
-        current_policy = "일반행정 운영"
-        current_unit = "기본행정 지원 및 청사관리"
-        current_detail = "부서 기본운영경비 지원"
+        current_policy = cls.DEFAULT_POLICY
+        current_unit = cls.DEFAULT_UNIT
+        current_detail = cls.DEFAULT_DETAIL
         current_category = "200 물건비"
         current_account = "201-01 사무관리비"
         current_acc_budget = 0
@@ -177,7 +319,8 @@ class BaseBudgetPdfParser:
             "year": year,
             "title": f"{year}년도 본예산 세출예산명세서",
             "items": items,
-            "total_budget": sum(it["budget"] for it in items)
+            "total_budget": sum(it["budget"] for it in items),
+            "import_level": "세목",
         }
 
 
@@ -235,9 +378,13 @@ class SupplementaryPdfParser:
     @classmethod
     def detect_supplementary_round(cls, text: str) -> int:
         """문서 텍스트에서 몇 회 추경인지 자동 감지 (1~4회)"""
-        match = re.search(r'제\s*([1-4일이삼사])\s*회\s*(추가경정|추경)', text)
+        match = re.search(
+            r'(?:제\s*([1-4일이삼사])\s*회\s*(?:추가경정|추경)|'
+            r'(?:추가경정|추경)\s*([1-4일이삼사])\s*회)',
+            text,
+        )
         if match:
-            r_str = match.group(1)
+            r_str = match.group(1) or match.group(2)
             mapping = {"1": 1, "일": 1, "2": 2, "이": 2, "3": 3, "삼": 3, "4": 4, "사": 4}
             return mapping.get(r_str, 1)
         return 1
@@ -246,7 +393,141 @@ class SupplementaryPdfParser:
     def parse_supplementary_pdf(cls, pdf_path: str) -> Dict[str, Any]:
         """추경 세출사업명세서 PDF 파싱"""
         text = cls.extract_text_from_pdf(pdf_path)
+        text = text.replace("\u318d", "·").replace("\ufeff", "")
         supp_round = cls.detect_supplementary_round(text)
+
+        year_match = re.search(r'(\d{4})\s*년도?', text)
+        year = int(year_match.group(1)) if year_match else 2026
+
+        has_category_rows = re.search(
+            r"(?m)^\s*\d{3}\s+.+?\s+[\d,]+\s+[\d,]+\s+[△▲+\-]?[\d,]+\s*$",
+            text,
+        )
+        has_statistic_rows = re.search(
+            r"(?m)^\s*\d{2}\s+.+?\s+[\d,]+\s+[\d,]+\s+[△▲+\-]?[\d,]+\s*$",
+            text,
+        )
+        if has_category_rows and has_statistic_rows:
+            return cls._parse_hierarchical_supplementary(text, year, supp_round)
+
+        return cls._parse_legacy_supplementary(text, year, supp_round)
+
+    @classmethod
+    def _parse_hierarchical_supplementary(
+        cls, text: str, year: int, supp_round: int
+    ) -> Dict[str, Any]:
+        """계층형 추경 표의 세부사업/편성목/통계목별 증감액을 추출한다."""
+        items: List[Dict[str, Any]] = []
+        department = ""
+        current_policy = BaseBudgetPdfParser.DEFAULT_POLICY
+        current_unit = BaseBudgetPdfParser.DEFAULT_UNIT
+        current_detail = BaseBudgetPdfParser.DEFAULT_DETAIL
+        detail_amounts = (0, 0, 0)
+        current_category = ""
+        category_amounts = (0, 0, 0)
+        pending_hierarchy_rows: List[Tuple[str, Tuple[int, int, int]]] = []
+
+        for raw_line in text.splitlines():
+            line = re.sub(r"\s+", " ", raw_line).strip()
+            if not line:
+                continue
+
+            if line.startswith("부서:"):
+                department = line.split(":", 1)[1].strip()
+                continue
+            if line.startswith("정책:"):
+                current_policy = line.split(":", 1)[1].strip()
+                continue
+            if line.startswith("단위:"):
+                unit_value = line.split(":", 1)[1].strip()
+                current_unit = re.sub(r"\s*\(\s*단위\s*:\s*천원\s*\)\s*$", "", unit_value).strip()
+                continue
+            if BaseBudgetPdfParser._is_report_noise(line):
+                continue
+
+            row_match = BaseBudgetPdfParser._BUDGET_ROW_PATTERN.match(line)
+            if not row_match:
+                continue
+
+            label = row_match.group("label").strip()
+            amounts = (
+                cls._clean_amount_str(row_match.group("current")) * 1000,
+                cls._clean_amount_str(row_match.group("previous")) * 1000,
+                cls._clean_amount_str(row_match.group("change")) * 1000,
+            )
+
+            category_match = re.match(r"^(\d{3})\s+(.+)$", label)
+            if category_match:
+                if pending_hierarchy_rows:
+                    if len(pending_hierarchy_rows) >= 3:
+                        current_policy = pending_hierarchy_rows[-3][0]
+                        current_unit = pending_hierarchy_rows[-2][0]
+                    elif len(pending_hierarchy_rows) == 2:
+                        current_unit = pending_hierarchy_rows[-2][0]
+                    current_detail, detail_amounts = pending_hierarchy_rows[-1]
+                    pending_hierarchy_rows.clear()
+                current_category = f"{category_match.group(1)} {category_match.group(2).strip()}"
+                category_amounts = amounts
+                continue
+
+            statistic_match = re.match(r"^(\d{2})\s+(.+)$", label)
+            if statistic_match and current_category:
+                category_code = current_category.split()[0]
+                statistic_code = statistic_match.group(1)
+                statistic_name = statistic_match.group(2).strip()
+                account = f"{category_code}-{statistic_code} {statistic_name}"
+
+                # 추경 반영 대상은 순증감이 있는 통계목만 표시한다.
+                if amounts[2] != 0:
+                    items.append({
+                        "department": department,
+                        "policy_project": current_policy,
+                        "unit_project": current_unit,
+                        "detail_project": current_detail,
+                        "detail_revised_budget": detail_amounts[0],
+                        "detail_prev_budget": detail_amounts[1],
+                        "detail_change_amount": detail_amounts[2],
+                        "category": current_category,
+                        "category_revised_budget": category_amounts[0],
+                        "category_prev_budget": category_amounts[1],
+                        "category_change_amount": category_amounts[2],
+                        "account": account,
+                        "sub_account": "통계목 전체",
+                        "revised_budget": amounts[0],
+                        "prev_budget": amounts[1],
+                        "change_amount": amounts[2],
+                        "budget_level": "account",
+                        "reason": (
+                            f"제{supp_round}회 추경: 기정액 {amounts[1]:,}원 → "
+                            f"추경후 {amounts[0]:,}원"
+                        ),
+                    })
+                continue
+
+            if not re.match(r"^\d", label):
+                pending_hierarchy_rows.append((label, amounts))
+
+        if not items:
+            raise ValueError(
+                "추경 세출예산사업명세서에서 증감된 통계목을 찾지 못했습니다."
+            )
+
+        return {
+            "year": year,
+            "round": supp_round,
+            "title": f"{year}년도 제{supp_round}회 추가경정예산 세출사업명세서",
+            "department": department,
+            "items": items,
+            "total_change": sum(it["change_amount"] for it in items),
+            "import_level": "통계목",
+            "raw_text_length": len(text),
+        }
+
+    @classmethod
+    def _parse_legacy_supplementary(
+        cls, text: str, year: int, supp_round: int
+    ) -> Dict[str, Any]:
+        """기존 산출기초 중심 추경 PDF/TXT 형식과의 하위 호환 파서."""
 
         items = []
         lines = text.split("\n")
@@ -318,8 +599,11 @@ class SupplementaryPdfParser:
             })
 
         return {
+            "year": year,
             "round": supp_round,
-            "title": f"2026년도 제{supp_round}회 추가경정예산 세출사업명세서",
+            "title": f"{year}년도 제{supp_round}회 추가경정예산 세출사업명세서",
             "items": items,
+            "total_change": sum(it["change_amount"] for it in items),
+            "import_level": "세목",
             "raw_text_length": len(text)
         }
