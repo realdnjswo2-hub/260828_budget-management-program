@@ -1,9 +1,10 @@
 """
-e호조 23310 연동 세목별 예산관리대장 및 연말(12.31) 지출·잔액 예측 데스크톱 프로그램
+e호조 연동 세목별 예산관리대장 및 연말(12.31) 지출·잔액 예측 데스크톱 프로그램
 - 당해년도 본예산 세출예산명세서 PDF 업로드 및 [단위-세부사업-편성목-통계목-세목] 5단계 계층 자동 인식/등록
 - 1~4회 추경(추가경정예산) 세출사업명세서 PDF 업로드, 파싱 및 검토/승인 다이얼로그
 - 1~4회 추경 변동 현황표 전용 탭 가시화
-- 엑셀 업로드 시 지출 적요 패턴 기반 자동분류 규칙 자동 추출 및 학습
+- 여러 세부사업의 e호조 지출 집행현황 PDF 일괄 업로드 및 중복 방지
+- 다른 PC로 전달 가능한 단일 예산관리대장 프로젝트 파일 저장/열기
 - 수동 규칙 추가/수정/삭제 팝업 모달 및 지출내역 더블클릭 연동 지원
 - 규칙 내보내기/가져오기 백업 및 기본 규칙 초기화 기능
 - 1월~12월 월별 지출 예산 통계 매트릭스 표 뷰 탑재
@@ -24,6 +25,7 @@ from engine.pdf_parser import BaseBudgetPdfParser, SupplementaryPdfParser
 from engine.classifier import KeywordClassifier
 from engine.forecaster import Forecaster
 from engine.excel_exporter import ExcelExporter
+from engine.project_store import ProjectStore
 
 
 class BaseBudgetReviewDialog(tk.Toplevel):
@@ -614,7 +616,8 @@ class BudgetApp(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("e호조(23310) 세출예산 세목별 예산관리대장 및 연말 지출예측 시스템")
+        self.app_title = "e호조 세출예산 세목별 예산관리대장 및 연말 지출예측 시스템"
+        self.title(self.app_title)
         self.geometry("1460x880")
         self.minsize(1160, 760)
 
@@ -629,7 +632,9 @@ class BudgetApp(tk.Tk):
         os.makedirs(self.output_dir, exist_ok=True)
 
         self.last_output_file = os.path.join(self.output_dir, f"{datetime.now().year}년_세출예산_세목별_예산관리대장.xlsx")
-        self.selected_file_path = tk.StringVar(value="")
+        self.current_project_path = None
+        self.project_dirty = False
+        self._initializing = True
 
         self.budget_master = []
         self.supplementary_budgets = []
@@ -638,6 +643,7 @@ class BudgetApp(tk.Tk):
         self.scheduled_plans = []
         self.transactions = []
         self.raw_transactions = []
+        self.expense_sources = []
         self.simulation_result = {}
         self.base_budget_confirmed = False
         self.base_budget_year = None
@@ -648,8 +654,16 @@ class BudgetApp(tk.Tk):
         self._setup_styles()
         self._load_configs()
         self._build_ui()
+        self._initializing = False
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.log("시스템 준비 완료: 1단계 [📘 본예산 명세서(PDF) 등록] 또는 3단계 [▶ e호조 분석 시작]을 이용하세요.", "INFO")
+        launch_file = sys.argv[1] if len(sys.argv) > 1 else ""
+        if launch_file and os.path.isfile(launch_file) and launch_file.lower().endswith(ProjectStore.EXTENSION):
+            self.after(100, lambda: self._load_project_file(launch_file, show_message=False))
+        else:
+            self._reclassify_and_refresh()
+
+        self.log("시스템 준비 완료: 1단계 본예산 등록 후 3단계에서 e호조 지출현황 PDF를 업로드하세요.", "INFO")
 
     def _setup_styles(self):
         self.style = ttk.Style(self)
@@ -761,6 +775,8 @@ class BudgetApp(tk.Tk):
                 "base_budget_year": self.base_budget_year,
                 "base_budget_source": self.base_budget_source,
             }, f, ensure_ascii=False, indent=2)
+        if not getattr(self, "_initializing", False):
+            self.project_dirty = True
 
     def _build_ui(self):
         top_frame = tk.Frame(self, bg="#FFFFFF", padx=14, pady=10, relief=tk.RAISED, bd=1)
@@ -768,7 +784,7 @@ class BudgetApp(tk.Tk):
 
         title_lbl = tk.Label(
             top_frame,
-            text="📊 e호조(23310) 세출예산 세목별 예산관리대장 및 연말 지출예측 시스템",
+            text="📊 e호조 세출예산 세목별 예산관리대장 및 연말 지출예측 시스템",
             font=("맑은 고딕", 13, "bold"),
             bg="#FFFFFF",
             fg="#1F497D"
@@ -786,18 +802,23 @@ class BudgetApp(tk.Tk):
         btn_upload_pdf = ttk.Button(btn_bar, text="📄 2단계: 추경 명세서(PDF) 업로드", command=self._on_upload_supplementary_pdf, style="Purple.TButton")
         btn_upload_pdf.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        lbl_file = tk.Label(btn_bar, text="e호조 파일:", font=("맑은 고딕", 9, "bold"), bg="#FFFFFF")
-        lbl_file.pack(side=tk.LEFT, padx=(6, 4))
+        # 3단계: 세부사업별로 내려받은 지출현황 PDF를 여러 개 동시 선택
+        btn_expense_pdf = ttk.Button(
+            btn_bar,
+            text="▶ 3단계: e호조 지출현황(PDF) 업로드",
+            command=self._on_upload_expense_pdfs,
+            style="Primary.TButton",
+        )
+        btn_expense_pdf.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        self.entry_file = tk.Entry(btn_bar, textvariable=self.selected_file_path, width=28, font=("맑은 고딕", 9))
-        self.entry_file.pack(side=tk.LEFT, padx=(0, 4), ipady=2)
-
-        btn_browse = ttk.Button(btn_bar, text="📁 찾기", command=self._on_browse_file, style="Action.TButton")
-        btn_browse.pack(side=tk.LEFT, padx=(0, 6))
-
-        # 3단계: ▶ e호조 지출 분석 시작
-        btn_analyze = ttk.Button(btn_bar, text="▶ 3단계: e호조 지출 분석 시작", command=self._on_start_analysis, style="Primary.TButton")
-        btn_analyze.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
+        self.lbl_expense_status = tk.Label(
+            btn_bar,
+            text="지출 PDF 0개",
+            font=("맑은 고딕", 8),
+            bg="#FFFFFF",
+            fg="#666666",
+        )
+        self.lbl_expense_status.pack(side=tk.LEFT, padx=(0, 8))
 
         btn_open_excel = ttk.Button(btn_bar, text="📊 엑셀 열기", command=self._on_open_excel, style="Success.TButton")
         btn_open_excel.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
@@ -805,8 +826,18 @@ class BudgetApp(tk.Tk):
         btn_open_folder = ttk.Button(btn_bar, text="📂 저장 폴더", command=self._on_open_folder, style="Action.TButton")
         btn_open_folder.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        btn_sample = ttk.Button(btn_bar, text="💡 샘플 파일 생성", command=self._on_generate_sample, style="Action.TButton")
-        btn_sample.pack(side=tk.RIGHT, padx=2)
+        btn_save_as = ttk.Button(
+            btn_bar, text="💾 다른 이름으로 저장", command=self._on_save_project_as, style="Action.TButton"
+        )
+        btn_save_as.pack(side=tk.RIGHT, padx=2)
+
+        btn_save = ttk.Button(btn_bar, text="💾 저장", command=self._on_save_project, style="Action.TButton")
+        btn_save.pack(side=tk.RIGHT, padx=2)
+
+        btn_open_project = ttk.Button(
+            btn_bar, text="📂 예산파일 열기", command=self._on_open_project, style="Action.TButton"
+        )
+        btn_open_project.pack(side=tk.RIGHT, padx=2)
 
         # =========================================================================
         # 중앙 탭 노트북 (Tab View)
@@ -1060,16 +1091,16 @@ class BudgetApp(tk.Tk):
         self.lbl_tx_count = tk.Label(top_filter, text="총 0건의 지출 내역", font=("맑은 고딕", 9, "bold"), bg="#FFFFFF", fg="#1F497D")
         self.lbl_tx_count.pack(side=tk.RIGHT)
 
-        cols = ("idx", "date", "account", "sub_account", "summary", "vendor", "amount", "rule")
+        cols = ("idx", "date", "detail_project", "account", "sub_account", "summary", "amount", "rule")
         self.tree_tx = ttk.Treeview(self.tab_transactions, columns=cols, show="headings", style="Budget.Treeview")
 
         headings = [
             ("idx", "연번", 50, "center"),
-            ("date", "결의일자", 95, "center"),
+            ("date", "지급일자", 95, "center"),
+            ("detail_project", "세부사업", 150, "w"),
             ("account", "통계목", 130, "w"),
             ("sub_account", "자동분류 세목", 150, "w"),
-            ("summary", "지출 적요 (온나라 기안명)", 360, "w"),
-            ("vendor", "채권자 (지급처)", 130, "w"),
+            ("summary", "지출 적요", 390, "w"),
             ("amount", "지출액 (원)", 110, "e"),
             ("rule", "적용 키워드 규칙", 180, "w")
         ]
@@ -1222,14 +1253,138 @@ class BudgetApp(tk.Tk):
         self.log_text.insert(tk.END, log_entry, level)
         self.log_text.see(tk.END)
 
-    def _on_browse_file(self):
+    def _collect_project_state(self):
+        return {
+            "base_budget_confirmed": self.base_budget_confirmed,
+            "base_budget_year": self.base_budget_year,
+            "base_budget_source": self.base_budget_source,
+            "budget_master": self.budget_master,
+            "supplementary_budgets": self.supplementary_budgets,
+            "rules": self.rules,
+            "recurring_plans": self.recurring_plans,
+            "scheduled_plans": self.scheduled_plans,
+            "raw_transactions": self.raw_transactions,
+            "transactions": self.transactions,
+            "expense_sources": self.expense_sources,
+        }
+
+    def _apply_project_state(self, state):
+        self.base_budget_confirmed = bool(state.get("base_budget_confirmed", False))
+        self.base_budget_year = state.get("base_budget_year")
+        self.base_budget_source = state.get("base_budget_source", "")
+        self.budget_master = list(state.get("budget_master", []))
+        self.supplementary_budgets = list(state.get("supplementary_budgets", []))
+        self.rules = list(state.get("rules", [])) or KeywordClassifier.get_default_rules()
+        self.recurring_plans = list(state.get("recurring_plans", []))
+        self.scheduled_plans = list(state.get("scheduled_plans", []))
+        self.raw_transactions = list(state.get("raw_transactions", []))
+        if not self.raw_transactions:
+            self.raw_transactions = list(state.get("transactions", []))
+        self.transactions = list(state.get("transactions", []))
+        self.expense_sources = list(state.get("expense_sources", []))
+
+        self.classifier.set_rules(self.rules)
+        self._save_configs()
+        self._render_rules_tab_data()
+        self._reclassify_and_refresh()
+        self._update_expense_status()
+
+    def _update_window_title(self):
+        if self.current_project_path:
+            self.title(f"{os.path.basename(self.current_project_path)} - {self.app_title}")
+        else:
+            self.title(self.app_title)
+
+    def _update_expense_status(self):
+        if not hasattr(self, "lbl_expense_status"):
+            return
+        file_count = len(self.expense_sources)
+        tx_count = len(self.raw_transactions)
+        self.lbl_expense_status.config(text=f"지출 PDF {file_count}개 / {tx_count}건")
+
+    def _on_save_project(self):
+        if not self.current_project_path:
+            return self._on_save_project_as()
+        return self._save_project_file(self.current_project_path)
+
+    def _on_save_project_as(self):
+        year = self.base_budget_year or datetime.now().year
+        file_path = filedialog.asksaveasfilename(
+            title="예산관리대장 다른 이름으로 저장",
+            defaultextension=ProjectStore.EXTENSION,
+            filetypes=[("예산관리대장 파일 (*.ebudget)", "*.ebudget"), ("모든 파일", "*.*")],
+            initialfile=f"{year}년_예산관리대장.ebudget",
+        )
+        if not file_path:
+            return False
+        return self._save_project_file(file_path)
+
+    def _save_project_file(self, file_path):
+        try:
+            saved_path = ProjectStore.save(file_path, self._collect_project_state())
+            self.current_project_path = saved_path
+            self.project_dirty = False
+            self._update_window_title()
+            self.log(f"예산관리대장 저장 완료: {os.path.basename(saved_path)}", "SUCCESS")
+            messagebox.showinfo(
+                "저장 완료",
+                "예산·추경·지출·분류규칙·연말계획을 하나의 파일로 저장했습니다.\n"
+                "이 파일과 프로그램을 다른 PC로 옮기면 동일한 내용을 열 수 있습니다.",
+            )
+            return True
+        except Exception as exc:
+            self.log(f"예산관리대장 저장 오류: {exc}", "ERROR")
+            messagebox.showerror("저장 오류", f"예산관리대장 파일을 저장할 수 없습니다:\n{exc}")
+            return False
+
+    def _on_open_project(self):
+        if self.project_dirty:
+            choice = messagebox.askyesnocancel(
+                "변경 내용 저장",
+                "현재 변경 내용을 저장한 후 다른 예산관리대장 파일을 열까요?",
+            )
+            if choice is None:
+                return
+            if choice and not self._on_save_project():
+                return
+
         file_path = filedialog.askopenfilename(
-            title="e호조 23310 엑셀/CSV 파일 선택",
-            filetypes=[("엑셀 파일 (*.xlsx)", "*.xlsx"), ("CSV 파일 (*.csv)", "*.csv"), ("모든 파일", "*.*")]
+            title="예산관리대장 파일 열기",
+            filetypes=[("예산관리대장 파일 (*.ebudget)", "*.ebudget"), ("모든 파일", "*.*")],
         )
         if file_path:
-            self.selected_file_path.set(file_path)
-            self.log(f"파일 선택 완료: {os.path.basename(file_path)}", "INFO")
+            self._load_project_file(file_path)
+
+    def _load_project_file(self, file_path, show_message=True):
+        try:
+            state = ProjectStore.load(file_path)
+            self._apply_project_state(state)
+            self.current_project_path = os.path.abspath(file_path)
+            self.project_dirty = False
+            self._update_window_title()
+            self.log(f"예산관리대장 열기 완료: {os.path.basename(file_path)}", "SUCCESS")
+            if show_message:
+                messagebox.showinfo(
+                    "열기 완료",
+                    f"{os.path.basename(file_path)} 파일의 저장 내용을 모두 불러왔습니다.",
+                )
+            return True
+        except Exception as exc:
+            self.log(f"예산관리대장 열기 오류: {exc}", "ERROR")
+            messagebox.showerror("열기 오류", f"예산관리대장 파일을 열 수 없습니다:\n{exc}")
+            return False
+
+    def _on_close(self):
+        if self.project_dirty:
+            choice = messagebox.askyesnocancel(
+                "저장되지 않은 변경 내용",
+                "변경된 내용을 예산관리대장 파일로 저장한 후 종료할까요?",
+            )
+            if choice is None:
+                return
+            if choice and not self._on_save_project():
+                return
+        self.destroy()
 
     def _on_generate_sample(self):
         sample_path = os.path.join(self.base_dir, "sample", "e호조_23310_샘플.xlsx")
@@ -1237,7 +1392,6 @@ class BudgetApp(tk.Tk):
         generate_sample_file(sample_path)
         generate_sample_base_budget_txt(os.path.join(self.base_dir, "sample", "2026년도_본예산_세출예산명세서_샘플.txt"))
         generate_sample_supplementary_txt(os.path.join(self.base_dir, "sample", "제1회_추경_세출사업명세서_샘플.txt"))
-        self.selected_file_path.set(sample_path)
         self.log("테스트용 본예산 명세서, 추경 명세서 및 e호조 엑셀 샘플 파일이 생성되었습니다.", "SUCCESS")
         messagebox.showinfo("샘플 생성 완료", "테스트용 [본예산 명세서], [추경 명세서], [e호조 엑셀] 샘플 파일이\n'sample' 폴더에 생성되었습니다.")
 
@@ -1449,8 +1603,8 @@ class BudgetApp(tk.Tk):
             return
 
         item_values = self.tree_tx.item(sel[0], "values")
-        acc = item_values[2]
-        summary = item_values[4]
+        acc = item_values[3]
+        summary = item_values[5]
 
         dialog = RuleEditDialog(self, initial_summary=summary)
         if acc:
@@ -1499,8 +1653,11 @@ class BudgetApp(tk.Tk):
             self._render_ledger_table()
             self._render_supp_table()
             self._render_monthly_table()
+            self._render_transactions_table()
+            self._update_expense_status()
             return
 
+        source = self._canonicalize_transaction_accounts(source)
         self.classifier.set_rules(self.rules)
         classified_txs = []
         classified_count = 0
@@ -1509,11 +1666,26 @@ class BudgetApp(tk.Tk):
         for tx in source:
             summary = tx.get("summary", "")
             acc = tx.get("account", "")
-            target_acc, sub_acc, rule_cond = self.classifier.classify(summary, acc)
-            
+            detail_key = self._match_text(tx.get("detail_project"))
+            matching_budgets = [
+                item for item in self.budget_master
+                if self._match_text(item.get("detail_project")) == detail_key
+                and item.get("account", "") == acc
+            ]
+            sub_accounts = {
+                item.get("sub_account", "미분류") for item in matching_budgets
+                if item.get("sub_account")
+            }
+            if len(sub_accounts) == 1:
+                target_acc = acc
+                sub_acc = next(iter(sub_accounts))
+                rule_cond = "PDF 사업명·통계목 직접 연결"
+            else:
+                target_acc, sub_acc, rule_cond = self.classifier.classify(summary, acc)
+
             tx_copy = dict(tx)
             tx_copy["sub_account"] = sub_acc if sub_acc else "미분류"
-            if target_acc and not acc:
+            if target_acc:
                 tx_copy["account"] = target_acc
             tx_copy["rule_matched"] = rule_cond if rule_cond else ""
 
@@ -1547,56 +1719,130 @@ class BudgetApp(tk.Tk):
         self._render_transactions_table()
         self.log(f"🔄 실시간 재분류 완료: 분류 성공 {classified_count}건 / 미분류 {unclassified_count}건 (예산대장·추경·월별통계 자동 갱신됨)", "INFO")
 
-    def _on_start_analysis(self):
-        file_path = self.selected_file_path.get().strip()
-        if not file_path:
-            sample_path = os.path.join(self.base_dir, "sample", "e호조_23310_샘플.xlsx")
-            if not os.path.exists(sample_path):
-                from sample_generator import generate_sample_file, generate_sample_base_budget_txt, generate_sample_supplementary_txt
-                generate_sample_file(sample_path)
-                generate_sample_base_budget_txt(os.path.join(self.base_dir, "sample", "2026년도_본예산_세출예산명세서_샘플.txt"))
-                generate_sample_supplementary_txt(os.path.join(self.base_dir, "sample", "제1회_추경_세출사업명세서_샘플.txt"))
-            self.selected_file_path.set(sample_path)
-            file_path = sample_path
-            self.log("지정된 파일이 없어 테스트용 샘플 엑셀 파일로 분석을 시작합니다.", "WARN")
+    @staticmethod
+    def _match_text(value):
+        return re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
 
-        if not os.path.exists(file_path):
-            messagebox.showerror("오류", f"파일을 찾을 수 없습니다:\n{file_path}")
+    @classmethod
+    def _account_name_only(cls, value):
+        return cls._match_text(re.sub(r"^\s*\d{3}(?:-\d{2})?\s*", "", str(value or "")))
+
+    def _canonicalize_transaction_accounts(self, transactions):
+        prepared = []
+        for source_tx in transactions:
+            tx = dict(source_tx)
+            detail_key = self._match_text(tx.get("detail_project"))
+            account_key = self._account_name_only(tx.get("account"))
+            candidates = [
+                item for item in self.budget_master
+                if self._match_text(item.get("detail_project")) == detail_key
+                and self._account_name_only(item.get("account")) == account_key
+            ]
+            if not candidates:
+                # 일부 PDF는 사업명의 공백/괄호 표기가 달라질 수 있으므로,
+                # 통계목이 부서 내에서 유일할 때에만 보조 매칭한다.
+                account_candidates = [
+                    item for item in self.budget_master
+                    if self._account_name_only(item.get("account")) == account_key
+                ]
+                identities = {
+                    (item.get("detail_project", ""), item.get("account", ""))
+                    for item in account_candidates
+                }
+                if len(identities) == 1:
+                    candidates = account_candidates
+
+            if candidates:
+                tx["detail_project"] = candidates[0].get("detail_project", tx.get("detail_project", ""))
+                tx["account"] = candidates[0].get("account", tx.get("account", ""))
+            prepared.append(tx)
+        return prepared
+
+    def _on_upload_expense_pdfs(self):
+        if not self.base_budget_confirmed or not self.budget_master:
+            messagebox.showwarning(
+                "본예산 확정 필요",
+                "지출현황 PDF를 등록하려면 먼저 1단계에서 당해년도 본예산을 확정 등록하세요.",
+            )
             return
 
-        self.log(f"3단계 e호조 지출 분석 시작: {file_path}", "INFO")
+        file_paths = filedialog.askopenfilenames(
+            title="세부사업별 e호조 지출 집행현황 PDF 선택 (여러 개 선택 가능)",
+            filetypes=[("PDF 파일 (*.pdf)", "*.pdf"), ("모든 파일", "*.*")],
+        )
+        if not file_paths:
+            return
 
+        self.log(f"3단계 e호조 지출현황 PDF {len(file_paths)}개 분석 시작", "INFO")
         try:
-            raw_txs, parse_msg = EHojoParser.parse_file(file_path)
-            self.raw_transactions = raw_txs
-            self.log(parse_msg, "SUCCESS")
-        except Exception as e:
-            self.log(f"파일 파싱 오류: {str(e)}", "ERROR")
-            messagebox.showerror("파싱 오류", f"엑셀 파일을 읽는 중 오류가 발생했습니다:\n{str(e)}")
+            incoming, sources, summary, messages = EHojoParser.parse_expense_pdfs(file_paths)
+            pdf_years = {int(src["year"]) for src in sources if src.get("year")}
+            if self.base_budget_year and any(int(self.base_budget_year) != year for year in pdf_years):
+                raise ValueError(
+                    f"본예산 연도({self.base_budget_year})와 지출현황 PDF 연도({sorted(pdf_years)})가 다릅니다."
+                )
+            incoming = self._canonicalize_transaction_accounts(incoming)
+        except Exception as exc:
+            self.log(f"지출현황 PDF 분석 오류: {exc}", "ERROR")
+            messagebox.showerror("PDF 분석 오류", f"지출현황 PDF를 읽는 중 오류가 발생했습니다:\n{exc}")
             return
 
-        all_rules, new_rules = KeywordClassifier.auto_infer_rules_from_transactions(raw_txs, self.rules)
+        detail_keys = {
+            self._match_text(tx.get("detail_project"))
+            for tx in incoming
+            if tx.get("detail_project")
+        }
+        replaced_count = sum(
+            1 for tx in self.raw_transactions
+            if self._match_text(tx.get("detail_project")) in detail_keys
+        )
+        detail_names = sorted({tx.get("detail_project", "") for tx in incoming if tx.get("detail_project")})
+        confirm_text = (
+            f"{summary}\n\n세부사업: {', '.join(detail_names)}\n"
+            "같은 세부사업을 이전에 올렸다면 최신 PDF 내용으로 교체합니다."
+        )
+        if replaced_count:
+            confirm_text += f"\n기존 지출 {replaced_count}건이 교체됩니다."
+        if not messagebox.askyesno("지출현황 반영 확인", confirm_text):
+            return
+
+        kept_transactions = [
+            tx for tx in self.raw_transactions
+            if self._match_text(tx.get("detail_project")) not in detail_keys
+        ]
+        self.raw_transactions = EHojoParser.deduplicate_transactions(kept_transactions + incoming)
+
+        kept_sources = []
+        for source in self.expense_sources:
+            source_keys = {self._match_text(name) for name in source.get("detail_projects", [])}
+            if not source_keys.intersection(detail_keys):
+                kept_sources.append(source)
+        self.expense_sources = kept_sources + sources
+
+        all_rules, new_rules = KeywordClassifier.auto_infer_rules_from_transactions(
+            self.raw_transactions, self.rules
+        )
         if new_rules:
             self.rules = all_rules
-            self._save_configs()
             self.classifier.set_rules(self.rules)
             self._render_rules_tab_data()
-            self.log(f"🧠 업로드 지출 패턴 분석: 신규 분류 규칙 {len(new_rules)}건 자동 추출 및 등록 완료!", "SUCCESS")
 
+        self._save_configs()
         self._reclassify_and_refresh()
+        self._update_expense_status()
 
+        for message in messages:
+            self.log(message, "SUCCESS")
+        self.log(summary, "SUCCESS")
         classified_count = sum(1 for tx in self.transactions if tx.get("sub_account") != "미분류")
-        unclassified_count = len(self.transactions) - classified_count
-
-        rule_msg = f"\n• ✨ 신규 자동 생성된 규칙: {len(new_rules)}건" if new_rules else ""
         messagebox.showinfo(
-            "분석 및 자동규칙 적용 완료",
-            f"분석, 12.31 연말 예측 및 월별 통계 집계가 완료되었습니다!\n\n"
-            f"• 총 지출건수: {len(self.transactions)}건\n"
-            f"• 자동분류 성공: {classified_count}건 (미분류: {unclassified_count}건){rule_msg}\n"
-            f"• 12.31 예상 집행총액: {self.simulation_result.get('total_forecast_spent', 0):,}원\n"
-            f"• 12.31 예상 불용잔액: {self.simulation_result.get('total_forecast_balance', 0):,}원\n\n"
-            f"결과 엑셀 파일이 'output' 폴더에 생성되었습니다."
+            "지출현황 반영 완료",
+            f"PDF {len(file_paths)}개를 반영했습니다.\n\n"
+            f"• 누적 지출건수: {len(self.transactions)}건\n"
+            f"• 누적 집행액: {sum(int(tx.get('amount', 0)) for tx in self.transactions):,}원\n"
+            f"• 예산 통계목/세목 연결: {classified_count}건\n"
+            f"• 미분류: {len(self.transactions) - classified_count}건\n\n"
+            "다른 PC로 전달하려면 [다른 이름으로 저장]을 눌러 .ebudget 파일로 저장하세요.",
         )
 
     def _render_ledger_table(self):
@@ -1779,10 +2025,10 @@ class BudgetApp(tk.Tk):
             self.tree_tx.insert("", tk.END, values=(
                 idx,
                 tx.get("date", ""),
+                tx.get("detail_project", ""),
                 tx.get("account", ""),
                 sub_acc,
                 tx.get("summary", ""),
-                tx.get("vendor", ""),
                 f"{int(tx.get('amount', 0)):,}",
                 tx.get("rule_matched", "")
             ), tags=tags)
@@ -1794,7 +2040,10 @@ class BudgetApp(tk.Tk):
 
         filtered = []
         for idx, tx in enumerate(self.transactions, start=1):
-            text_pool = f"{tx.get('summary', '')} {tx.get('vendor', '')} {tx.get('sub_account', '')} {tx.get('account', '')}".lower()
+            text_pool = (
+                f"{tx.get('detail_project', '')} {tx.get('summary', '')} {tx.get('vendor', '')} "
+                f"{tx.get('sub_account', '')} {tx.get('account', '')}"
+            ).lower()
             if not q or q in text_pool:
                 filtered.append((idx, tx))
 
@@ -1805,17 +2054,17 @@ class BudgetApp(tk.Tk):
             self.tree_tx.insert("", tk.END, values=(
                 idx,
                 tx.get("date", ""),
+                tx.get("detail_project", ""),
                 tx.get("account", ""),
                 sub_acc,
                 tx.get("summary", ""),
-                tx.get("vendor", ""),
                 f"{int(tx.get('amount', 0)):,}",
                 tx.get("rule_matched", "")
             ), tags=tags)
 
     def _on_open_excel(self):
         if not os.path.exists(self.last_output_file):
-            messagebox.showwarning("파일 없음", "먼저 '업로드 파일 분석 시작'을 실행하여 엑셀 파일을 생성하세요.")
+            messagebox.showwarning("파일 없음", "먼저 3단계에서 e호조 지출현황 PDF를 업로드하세요.")
             return
         try:
             os.startfile(self.last_output_file)

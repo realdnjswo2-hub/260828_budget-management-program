@@ -1,7 +1,7 @@
 """
-e호조 23310 지출 엑셀/CSV 파일 파서 (e-Hojo 23310 Expense Parser)
-- 유연한 헤더 매핑 (결의일자, 통계목, 지출액, 적요, 채권자)
-- openpyxl 및 csv 파싱 지원
+e호조 지출 파일 파서 (e-Hojo Expense Parser)
+- 지출 집행현황 PDF 표 파싱 (사업명, 통계목, 적요, 결의금액, 지급일자)
+- 기존 23310 엑셀/CSV 형식 호환
 """
 
 import os
@@ -52,8 +52,225 @@ class EHojoParser:
             return cls._parse_excel(file_path)
         elif ext == ".csv":
             return cls._parse_csv(file_path)
+        elif ext == ".pdf":
+            transactions, metadata, message = cls.parse_expense_pdf(file_path)
+            return transactions, message
         else:
-            raise ValueError(f"지원하지 않는 파일 형식입니다: {ext} (.xlsx, .csv 지원)")
+            raise ValueError(f"지원하지 않는 파일 형식입니다: {ext} (.pdf, .xlsx, .csv 지원)")
+
+    @classmethod
+    def parse_expense_pdf(cls, file_path: str):
+        """e호조 '지출 집행현황 조회' PDF 한 개를 파싱한다."""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"파일을 찾을 수 없습니다: {file_path}")
+
+        try:
+            import pdfplumber
+        except ImportError as exc:
+            raise ImportError("PDF 분석에 pdfplumber 라이브러리가 필요합니다.") from exc
+
+        transactions = []
+        year = None
+        department = ""
+
+        with pdfplumber.open(file_path) as pdf:
+            if not pdf.pages:
+                raise ValueError("PDF에 읽을 수 있는 페이지가 없습니다.")
+
+            first_text = pdf.pages[0].extract_text() or ""
+            if "지출" not in first_text or "집행현황" not in first_text:
+                raise ValueError("e호조 '지출 집행현황 조회' PDF 형식을 확인할 수 없습니다.")
+
+            year_match = re.search(r"(20\d{2})\s*년도\s*지출\s*집행현황", first_text)
+            if year_match:
+                year = int(year_match.group(1))
+
+            department_match = re.search(r"부\s*서\s*:\s*([^\n]+?)(?:\s+출력일자\s*:|\n)", first_text)
+            if department_match:
+                department = cls._clean_pdf_text(department_match.group(1))
+
+            for page_number, page in enumerate(pdf.pages, start=1):
+                for table in page.extract_tables() or []:
+                    transactions.extend(
+                        cls._transactions_from_expense_table(
+                            table,
+                            source_file=os.path.basename(file_path),
+                            page_number=page_number,
+                            department=department,
+                        )
+                    )
+
+        transactions = cls.deduplicate_transactions(transactions)
+        if not transactions:
+            raise ValueError(
+                "PDF 표에서 결의금액이 있는 지출 내역을 찾지 못했습니다. "
+                "e호조의 '지출 집행현황 조회' 출력물인지 확인하세요."
+            )
+
+        detail_projects = sorted({tx.get("detail_project", "") for tx in transactions if tx.get("detail_project")})
+        metadata = {
+            "file_name": os.path.basename(file_path),
+            "year": year,
+            "department": department,
+            "detail_projects": detail_projects,
+            "transaction_count": len(transactions),
+            "total_amount": sum(int(tx.get("amount", 0)) for tx in transactions),
+        }
+        detail_label = ", ".join(detail_projects) if detail_projects else "사업명 미확인"
+        message = (
+            f"{os.path.basename(file_path)}: {detail_label} 지출 "
+            f"{len(transactions)}건, {metadata['total_amount']:,}원 추출"
+        )
+        return transactions, metadata, message
+
+    @classmethod
+    def parse_expense_pdfs(cls, file_paths):
+        """여러 세부사업 PDF를 한 번에 읽고 중복 지급 행을 제거한다."""
+        if not file_paths:
+            raise ValueError("선택된 지출현황 PDF가 없습니다.")
+
+        all_transactions = []
+        sources = []
+        messages = []
+        for file_path in file_paths:
+            txs, metadata, message = cls.parse_expense_pdf(file_path)
+            all_transactions.extend(txs)
+            sources.append(metadata)
+            messages.append(message)
+
+        deduplicated = cls.deduplicate_transactions(all_transactions)
+        removed = len(all_transactions) - len(deduplicated)
+        summary = (
+            f"PDF {len(file_paths)}개에서 지출 {len(deduplicated)}건, "
+            f"총 {sum(int(tx.get('amount', 0)) for tx in deduplicated):,}원을 읽었습니다."
+        )
+        if removed:
+            summary += f" 중복 {removed}건은 제외했습니다."
+        return deduplicated, sources, summary, messages
+
+    @classmethod
+    def _transactions_from_expense_table(
+        cls, table, source_file="", page_number=0, department=""
+    ) -> List[Dict[str, Any]]:
+        if not table or len(table) < 3:
+            return []
+
+        header_rows = table[:3]
+        header_text = " ".join(
+            cls._clean_pdf_text(cell)
+            for row in header_rows
+            for cell in (row or [])
+            if cell
+        )
+        if "사업명" not in header_text or "통계목" not in header_text or "결의금액" not in header_text:
+            return []
+
+        # e호조 지출 집행현황의 22열 표. 헤더명으로 우선 찾고, 병합 헤더는
+        # 출력 양식의 고정 열 위치를 사용한다.
+        first_header = [cls._clean_pdf_text(v) for v in (table[0] or [])]
+        second_header = [cls._clean_pdf_text(v) for v in (table[1] or [])]
+
+        def find_index(name, rows, fallback):
+            for row in rows:
+                for idx, value in enumerate(row):
+                    if name in value:
+                        return idx
+            return fallback
+
+        business_idx = find_index("사업명", [first_header], 3)
+        account_idx = find_index("통계목", [first_header], 4)
+        summary_idx = find_index("적요", [first_header], 5)
+        proposal_idx = find_index("품의번호", [second_header], 6)
+        amount_idx = find_index("결의금액", [second_header], 16)
+        payment_order_idx = find_index("지급명령번호", [second_header], 19)
+        payment_date_idx = find_index("지급일자", [second_header], 20)
+        decision_date_idx = find_index("결의승인일", [second_header], 15)
+
+        start_idx = 2
+        results = []
+        for row in table[start_idx:]:
+            if not row:
+                continue
+            values = list(row)
+
+            def cell(idx):
+                return values[idx] if 0 <= idx < len(values) else None
+
+            business = cls._clean_pdf_text(cell(business_idx))
+            account = cls._clean_pdf_text(cell(account_idx))
+            summary = cls._clean_pdf_text(cell(summary_idx), preserve_spaces=True)
+            amount = cls._clean_amount(cell(amount_idx))
+            if not business or not account or amount == 0:
+                continue
+            if any(term in business for term in ("합계", "소계", "총계")):
+                continue
+
+            payment_date = cls._clean_pdf_text(cell(payment_date_idx))
+            decision_date = cls._clean_pdf_text(cell(decision_date_idx))
+            date_value = payment_date if re.match(r"20\d{2}-\d{2}-\d{2}", payment_date) else decision_date
+            payment_order = cls._clean_pdf_text(cell(payment_order_idx))
+            proposal_number = cls._clean_pdf_text(cell(proposal_idx))
+
+            results.append({
+                "code": payment_order or proposal_number,
+                "date": date_value,
+                "account": account,
+                "sub_account": "미분류",
+                "summary": summary,
+                "vendor": "",
+                "amount": amount,
+                "rule_matched": "",
+                "detail_project": business,
+                "department": department,
+                "proposal_number": proposal_number,
+                "payment_order_number": payment_order,
+                "source_file": source_file,
+                "source_page": page_number,
+            })
+        return results
+
+    @classmethod
+    def _clean_pdf_text(cls, value: Any, preserve_spaces: bool = False) -> str:
+        if value is None:
+            return ""
+        text = str(value).replace("\r", "").strip()
+        if preserve_spaces:
+            text = re.sub(r"\s*\n\s*", "", text)
+            return re.sub(r"[ \t]+", " ", text).strip()
+        return re.sub(r"\s+", "", text)
+
+    @classmethod
+    def transaction_identity(cls, tx: Dict[str, Any]):
+        """다른 세부사업 PDF 또는 재업로드에서 같은 지급 행을 식별한다."""
+        payment_order = cls._clean_str(tx.get("payment_order_number") or tx.get("code"))
+        if payment_order:
+            return (
+                "payment",
+                cls._clean_str(tx.get("department")),
+                payment_order,
+                cls._clean_str(tx.get("date")),
+                int(tx.get("amount", 0)),
+            )
+        return (
+            "content",
+            cls._clean_str(tx.get("detail_project")),
+            cls._clean_str(tx.get("account")),
+            cls._clean_str(tx.get("summary")),
+            cls._clean_str(tx.get("date")),
+            int(tx.get("amount", 0)),
+        )
+
+    @classmethod
+    def deduplicate_transactions(cls, transactions):
+        seen = set()
+        results = []
+        for tx in transactions:
+            identity = cls.transaction_identity(tx)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            results.append(tx)
+        return results
 
     @classmethod
     def _parse_excel(cls, file_path: str) -> Tuple[List[Dict[str, Any]], str]:

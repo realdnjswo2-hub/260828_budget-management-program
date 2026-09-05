@@ -51,14 +51,17 @@ if (-not $pythonPath) {
 
 Write-Host "[확인] Python 경로: $pythonPath" -ForegroundColor Green
 
-Write-Host "1. 필수 빌드 패키지(openpyxl, pypdf, pyinstaller) 설치 확인 중..." -ForegroundColor Yellow
-& $pythonPath -m pip install openpyxl pypdf pyinstaller --break-system-packages --quiet
+Write-Host "1. 필수 빌드 패키지(openpyxl, pypdf, pdfplumber, pyinstaller) 설치 확인 중..." -ForegroundColor Yellow
+& $pythonPath -m pip install openpyxl pypdf pdfplumber pyinstaller --break-system-packages --quiet
 
 Write-Host "2. PyInstaller 빌드 실행 중..." -ForegroundColor Yellow
 $currentDir = Get-Location
 
 & $pythonPath -m PyInstaller --noconsole --onefile --clean `
     --name="예산관리대장" `
+    --additional-hooks-dir "build_support\hooks" `
+    --runtime-hook "build_support\pyi_rth_tk.py" `
+    --collect-all "pdfplumber" `
     --add-data "config;config" `
     --add-data "sample;sample" `
     --add-data "engine;engine" `

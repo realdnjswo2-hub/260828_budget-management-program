@@ -13,6 +13,43 @@ from typing import List, Dict, Any, Optional, Tuple
 
 class Forecaster:
     @staticmethod
+    def _detail_key(value: Any) -> str:
+        return "".join(str(value or "").split())
+
+    @classmethod
+    def _budget_identity(cls, item: Dict[str, Any]) -> Tuple[str, str, str]:
+        return (
+            cls._detail_key(item.get("detail_project")),
+            item.get("account", "기타"),
+            item.get("sub_account", "미분류"),
+        )
+
+    @classmethod
+    def _build_spending_maps(cls, transactions: List[Dict[str, Any]]):
+        exact = {}
+        legacy = {}
+        for tx in transactions:
+            account = tx.get("account", "기타")
+            sub_account = tx.get("sub_account", "미분류")
+            amount = int(tx.get("amount", 0))
+            detail = cls._detail_key(tx.get("detail_project"))
+            if detail:
+                key = (detail, account, sub_account)
+                exact[key] = exact.get(key, 0) + amount
+            else:
+                key = (account, sub_account)
+                legacy[key] = legacy.get(key, 0) + amount
+        return exact, legacy
+
+    @classmethod
+    def _legacy_budget_counts(cls, budget_items: List[Dict[str, Any]]):
+        counts = {}
+        for item in budget_items:
+            key = (item.get("account", "기타"), item.get("sub_account", "미분류"))
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    @staticmethod
     def calculate_remaining_months(base_date: Optional[str] = None) -> int:
         if base_date:
             try:
@@ -33,13 +70,17 @@ class Forecaster:
         budget_items: List[Dict[str, Any]],
         transactions: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
+        budget_keys = {cls._budget_identity(item) for item in budget_items}
+        legacy_counts = cls._legacy_budget_counts(budget_items)
         monthly_map = {}
+        legacy_monthly_map = {}
+        unbudgeted_map = {}
         for tx in transactions:
             acc = tx.get("account", "기타")
             sub_acc = tx.get("sub_account", "미분류")
-            key = (acc, sub_acc)
-            if key not in monthly_map:
-                monthly_map[key] = [0] * 12
+            detail = cls._detail_key(tx.get("detail_project"))
+            exact_key = (detail, acc, sub_acc)
+            legacy_key = (acc, sub_acc)
 
             date_str = str(tx.get("date", "")).replace(".", "-").replace("/", "-")
             month = 0
@@ -51,7 +92,19 @@ class Forecaster:
                 month = 0
 
             if 1 <= month <= 12:
-                monthly_map[key][month - 1] += int(tx.get("amount", 0))
+                amount = int(tx.get("amount", 0))
+                if detail:
+                    target = monthly_map.setdefault(exact_key, [0] * 12)
+                    target[month - 1] += amount
+                    if exact_key not in budget_keys:
+                        unmatched = unbudgeted_map.setdefault(exact_key, [0] * 12)
+                        unmatched[month - 1] += amount
+                else:
+                    target = legacy_monthly_map.setdefault(legacy_key, [0] * 12)
+                    target[month - 1] += amount
+                    if legacy_counts.get(legacy_key, 0) != 1:
+                        unmatched = unbudgeted_map.setdefault(("", acc, sub_acc), [0] * 12)
+                        unmatched[month - 1] += amount
 
         matrix_rows = []
         monthly_totals = [0] * 12
@@ -62,9 +115,12 @@ class Forecaster:
             acc = b.get("account", "기타")
             sub_acc = b.get("sub_account", "기타")
             budget = int(b.get("budget", 0))
-            key = (acc, sub_acc)
-
-            m_values = monthly_map.get(key, [0] * 12)
+            exact_key = cls._budget_identity(b)
+            legacy_key = (acc, sub_acc)
+            m_values = list(monthly_map.get(exact_key, [0] * 12))
+            if legacy_counts.get(legacy_key, 0) == 1:
+                legacy_values = legacy_monthly_map.get(legacy_key, [0] * 12)
+                m_values = [m_values[i] + legacy_values[i] for i in range(12)]
             row_sum = sum(m_values)
             balance = budget - row_sum
             exec_rate = round((row_sum / budget * 100), 1) if budget > 0 else 0.0
@@ -87,24 +143,23 @@ class Forecaster:
                 "exec_rate": exec_rate
             })
 
-        for (acc, sub_acc), m_values in monthly_map.items():
-            if not any(b.get("account") == acc and b.get("sub_account") == sub_acc for b in budget_items):
-                row_sum = sum(m_values)
-                for i in range(12):
-                    monthly_totals[i] += m_values[i]
-                total_spent += row_sum
-                matrix_rows.append({
-                    "unit_project": "-",
-                    "detail_project": "-",
-                    "category": "-",
-                    "account": acc,
-                    "sub_account": sub_acc,
-                    "budget": 0,
-                    "months": m_values,
-                    "total_spent": row_sum,
-                    "balance": -row_sum,
-                    "exec_rate": 0.0
-                })
+        for (detail, acc, sub_acc), m_values in unbudgeted_map.items():
+            row_sum = sum(m_values)
+            for i in range(12):
+                monthly_totals[i] += m_values[i]
+            total_spent += row_sum
+            matrix_rows.append({
+                "unit_project": "-",
+                "detail_project": detail or "-",
+                "category": "-",
+                "account": acc,
+                "sub_account": sub_acc,
+                "budget": 0,
+                "months": m_values,
+                "total_spent": row_sum,
+                "balance": -row_sum,
+                "exec_rate": 0.0
+            })
 
         overall_exec_rate = round((total_spent / total_budget * 100), 1) if total_budget > 0 else 0.0
 
@@ -121,8 +176,11 @@ class Forecaster:
     def calculate_supplementary_matrix(
         cls,
         supplementary_items: List[Dict[str, Any]],
-        spent_map: Dict[Tuple[str, str], int]
+        exact_spent: Dict[Tuple[str, str, str], int],
+        legacy_spent: Optional[Dict[Tuple[str, str], int]] = None,
     ) -> Dict[str, Any]:
+        legacy_spent = legacy_spent or {}
+        legacy_counts = cls._legacy_budget_counts(supplementary_items)
         rows = []
         tot_base = 0
         tot_r1 = 0
@@ -143,7 +201,11 @@ class Forecaster:
             r4 = int(supps.get("4", 0))
 
             final_b = base_b + r1 + r2 + r3 + r4
-            spent = spent_map.get((acc, sub_acc), 0)
+            exact_key = cls._budget_identity(item)
+            legacy_key = (acc, sub_acc)
+            spent = exact_spent.get(exact_key, 0)
+            if legacy_counts.get(legacy_key, 0) == 1:
+                spent += legacy_spent.get(legacy_key, 0)
             balance = final_b - spent
             exec_rate = round((spent / final_b * 100), 1) if final_b > 0 else 0.0
 
@@ -200,12 +262,8 @@ class Forecaster:
     ) -> Dict[str, Any]:
         remaining_months = cls.calculate_remaining_months(base_date)
 
-        spent_map = {}
-        for tx in transactions:
-            acc = tx.get("account", "기타")
-            sub_acc = tx.get("sub_account", "미분류")
-            key = (acc, sub_acc)
-            spent_map[key] = spent_map.get(key, 0) + int(tx.get("amount", 0))
+        exact_spent, legacy_spent = cls._build_spending_maps(transactions)
+        legacy_counts = cls._legacy_budget_counts(budget_items)
 
         recurring_map = {}
         if recurring_plans:
@@ -236,15 +294,19 @@ class Forecaster:
             acc = b.get("account", "기타")
             sub_acc = b.get("sub_account", "기타")
             budget = int(b.get("budget", 0))
-            key = (acc, sub_acc)
+            exact_key = cls._budget_identity(b)
+            legacy_key = (acc, sub_acc)
+            plan_key = (acc, sub_acc)
 
-            actual_spent = spent_map.get(key, 0)
+            actual_spent = exact_spent.get(exact_key, 0)
+            if legacy_counts.get(legacy_key, 0) == 1:
+                actual_spent += legacy_spent.get(legacy_key, 0)
             current_balance = budget - actual_spent
             exec_rate = round((actual_spent / budget * 100), 1) if budget > 0 else 0.0
 
-            monthly_rec = recurring_map.get(key, 0)
+            monthly_rec = recurring_map.get(plan_key, 0)
             rec_spent = monthly_rec * remaining_months
-            sched_spent = scheduled_map.get(key, 0)
+            sched_spent = scheduled_map.get(plan_key, 0)
 
             forecast_total_spent = actual_spent + rec_spent + sched_spent
             forecast_balance = budget - forecast_total_spent
@@ -301,10 +363,15 @@ class Forecaster:
             total_forecast_spent += forecast_total_spent
             total_forecast_balance += forecast_balance
 
-        unclassified_spent = 0
-        for (acc, sub_acc), amt in spent_map.items():
-            if not any(b.get("account") == acc and b.get("sub_account") == sub_acc for b in budget_items):
-                unclassified_spent += amt
+        budget_keys = {cls._budget_identity(item) for item in budget_items}
+        unclassified_spent = sum(
+            amount for key, amount in exact_spent.items() if key not in budget_keys
+        )
+        unclassified_spent += sum(
+            amount
+            for key, amount in legacy_spent.items()
+            if legacy_counts.get(key, 0) != 1
+        )
 
         overall_exec_rate = round((total_spent / total_budget * 100), 1) if total_budget > 0 else 0.0
         overall_forecast_exec_rate = round((total_forecast_spent / total_budget * 100), 1) if total_budget > 0 else 0.0
@@ -312,7 +379,9 @@ class Forecaster:
         monthly_matrix = cls.calculate_monthly_matrix(budget_items, transactions)
         supp_matrix = {}
         if supplementary_items:
-            supp_matrix = cls.calculate_supplementary_matrix(supplementary_items, spent_map)
+            supp_matrix = cls.calculate_supplementary_matrix(
+                supplementary_items, exact_spent, legacy_spent
+            )
 
         return {
             "remaining_months": remaining_months,
