@@ -5,6 +5,7 @@ import unittest
 from engine.forecaster import Forecaster
 from engine.parser import EHojoParser
 from engine.project_store import ProjectStore
+from main import BudgetApp
 
 
 class ExpensePdfParserTests(unittest.TestCase):
@@ -69,6 +70,17 @@ class PortableProjectTests(unittest.TestCase):
         self.assertEqual(loaded["base_budget_year"], 2026)
         self.assertEqual(loaded["raw_transactions"][0]["amount"], 140_000)
         self.assertEqual(loaded["expense_sources"][0]["file_name"], "현장민원.pdf")
+
+    def test_empty_project_state_clears_all_user_data(self):
+        state = BudgetApp._empty_project_state()
+
+        self.assertFalse(state["base_budget_confirmed"])
+        self.assertIsNone(state["base_budget_year"])
+        for field in ProjectStore.LIST_FIELDS:
+            if field == "rules":
+                self.assertGreater(len(state[field]), 0)
+            else:
+                self.assertEqual(state[field], [])
 
 
 class DetailProjectAggregationTests(unittest.TestCase):

@@ -826,13 +826,20 @@ class BudgetApp(tk.Tk):
         btn_open_folder = ttk.Button(btn_bar, text="📂 저장 폴더", command=self._on_open_folder, style="Action.TButton")
         btn_open_folder.pack(side=tk.LEFT, padx=(0, 6), ipady=1)
 
-        btn_save_as = ttk.Button(
-            btn_bar, text="💾 다른 이름으로 저장", command=self._on_save_project_as, style="Action.TButton"
-        )
-        btn_save_as.pack(side=tk.RIGHT, padx=2)
+        self.save_menu = tk.Menu(btn_bar, tearoff=False)
+        self.save_menu.add_command(label="💾 저장", command=self._on_save_project)
+        self.save_menu.add_command(label="💾 다른 이름으로 저장", command=self._on_save_project_as)
+        self.btn_save_menu = ttk.Menubutton(btn_bar, text="💾 저장 ▼", style="Action.TButton")
+        self.btn_save_menu.configure(menu=self.save_menu)
+        self.btn_save_menu.pack(side=tk.RIGHT, padx=2)
 
-        btn_save = ttk.Button(btn_bar, text="💾 저장", command=self._on_save_project, style="Action.TButton")
-        btn_save.pack(side=tk.RIGHT, padx=2)
+        self.btn_reset_data = ttk.Button(
+            btn_bar,
+            text="🗑 입력 데이터 초기화",
+            command=self._on_reset_all_data,
+            style="Action.TButton",
+        )
+        self.btn_reset_data.pack(side=tk.RIGHT, padx=2)
 
         btn_open_project = ttk.Button(
             btn_bar, text="📂 예산파일 열기", command=self._on_open_project, style="Action.TButton"
@@ -901,6 +908,30 @@ class BudgetApp(tk.Tk):
         self.log_text.tag_config("WARN", foreground="#CE9178")
         self.log_text.tag_config("ERROR", foreground="#F44747")
 
+    def _create_scrollable_tree(self, parent, columns, *, style=None, height=None, padx=8, pady=6):
+        """표와 양방향 스크롤바가 서로 밀리지 않는 고정 격자 영역을 만든다."""
+        table_frame = tk.Frame(parent, bg="#FFFFFF")
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=padx, pady=pady)
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+
+        options = {"columns": columns, "show": "headings"}
+        if style:
+            options["style"] = style
+        if height is not None:
+            options["height"] = height
+
+        tree = ttk.Treeview(table_frame, **options)
+        scroll_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=tree.yview)
+        scroll_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
+        ttk.Frame(table_frame).grid(row=1, column=1, sticky="nsew")
+        return tree, scroll_y, scroll_x
+
     # -------------------------------------------------------------------------
     # 탭 1: 세목별 예산관리대장
     # -------------------------------------------------------------------------
@@ -922,7 +953,9 @@ class BudgetApp(tk.Tk):
             "exec_rate", "remaining_recurring", "scheduled_spent", "forecast_total_spent",
             "forecast_balance", "status"
         )
-        self.tree_ledger = ttk.Treeview(self.tab_ledger, columns=cols, show="headings", style="Budget.Treeview")
+        self.tree_ledger, self.scroll_ledger_y, self.scroll_ledger_x = self._create_scrollable_tree(
+            self.tab_ledger, cols, style="Budget.Treeview"
+        )
 
         headings = [
             ("detail_project", "세부사업", 130, "w"),
@@ -942,15 +975,7 @@ class BudgetApp(tk.Tk):
 
         for col_id, col_text, col_w, col_align in headings:
             self.tree_ledger.heading(col_id, text=col_text)
-            self.tree_ledger.column(col_id, width=col_w, anchor=col_align)
-
-        tree_scroll_y = ttk.Scrollbar(self.tab_ledger, orient=tk.VERTICAL, command=self.tree_ledger.yview)
-        tree_scroll_x = ttk.Scrollbar(self.tab_ledger, orient=tk.HORIZONTAL, command=self.tree_ledger.xview)
-        self.tree_ledger.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
-
-        self.tree_ledger.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=6)
-        tree_scroll_y.pack(side=tk.RIGHT, fill=tk.Y, pady=6, padx=(0, 8))
-        tree_scroll_x.pack(side=tk.BOTTOM, fill=tk.X, padx=8)
+            self.tree_ledger.column(col_id, width=col_w, anchor=col_align, stretch=False)
 
         self.tree_ledger.tag_configure("header_row", background="#E8EEF5", font=("맑은 고딕", 9, "bold"))
         self.tree_ledger.tag_configure("total_row", background="#D9E1F2", font=("맑은 고딕", 9, "bold"))
@@ -978,7 +1003,9 @@ class BudgetApp(tk.Tk):
             "r1", "r2", "r3", "r4",
             "final_budget", "spent", "balance", "exec_rate", "reason"
         )
-        self.tree_supp = ttk.Treeview(self.tab_supp, columns=cols, show="headings", style="Budget.Treeview")
+        self.tree_supp, self.scroll_supp_y, self.scroll_supp_x = self._create_scrollable_tree(
+            self.tab_supp, cols, style="Budget.Treeview"
+        )
 
         s_headings = [
             ("detail_project", "세부사업", 120, "w"),
@@ -998,15 +1025,7 @@ class BudgetApp(tk.Tk):
 
         for col_id, col_text, col_w, col_align in s_headings:
             self.tree_supp.heading(col_id, text=col_text)
-            self.tree_supp.column(col_id, width=col_w, anchor=col_align)
-
-        s_scroll_y = ttk.Scrollbar(self.tab_supp, orient=tk.VERTICAL, command=self.tree_supp.yview)
-        s_scroll_x = ttk.Scrollbar(self.tab_supp, orient=tk.HORIZONTAL, command=self.tree_supp.xview)
-        self.tree_supp.configure(yscrollcommand=s_scroll_y.set, xscrollcommand=s_scroll_x.set)
-
-        self.tree_supp.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=6)
-        s_scroll_y.pack(side=tk.RIGHT, fill=tk.Y, pady=6, padx=(0, 8))
-        s_scroll_x.pack(side=tk.BOTTOM, fill=tk.X, padx=8)
+            self.tree_supp.column(col_id, width=col_w, anchor=col_align, stretch=False)
 
         self.tree_supp.tag_configure("header_row", background="#E8EEF5", font=("맑은 고딕", 9, "bold"))
         self.tree_supp.tag_configure("total_row", background="#D9E1F2", font=("맑은 고딕", 9, "bold"))
@@ -1032,7 +1051,9 @@ class BudgetApp(tk.Tk):
             "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12",
             "total_spent", "balance", "exec_rate"
         )
-        self.tree_monthly = ttk.Treeview(self.tab_monthly, columns=cols, show="headings", style="Budget.Treeview")
+        self.tree_monthly, self.scroll_monthly_y, self.scroll_monthly_x = self._create_scrollable_tree(
+            self.tab_monthly, cols, style="Budget.Treeview"
+        )
 
         m_headings = [
             ("detail_project", "세부사업", 120, "w"),
@@ -1058,15 +1079,7 @@ class BudgetApp(tk.Tk):
 
         for col_id, col_text, col_w, col_align in m_headings:
             self.tree_monthly.heading(col_id, text=col_text)
-            self.tree_monthly.column(col_id, width=col_w, anchor=col_align)
-
-        m_scroll_y = ttk.Scrollbar(self.tab_monthly, orient=tk.VERTICAL, command=self.tree_monthly.yview)
-        m_scroll_x = ttk.Scrollbar(self.tab_monthly, orient=tk.HORIZONTAL, command=self.tree_monthly.xview)
-        self.tree_monthly.configure(yscrollcommand=m_scroll_y.set, xscrollcommand=m_scroll_x.set)
-
-        self.tree_monthly.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=6)
-        m_scroll_y.pack(side=tk.RIGHT, fill=tk.Y, pady=6, padx=(0, 8))
-        m_scroll_x.pack(side=tk.BOTTOM, fill=tk.X, padx=8)
+            self.tree_monthly.column(col_id, width=col_w, anchor=col_align, stretch=False)
 
         self.tree_monthly.tag_configure("header_row", background="#E8EEF5", font=("맑은 고딕", 9, "bold"))
         self.tree_monthly.tag_configure("total_row", background="#D9E1F2", font=("맑은 고딕", 9, "bold"))
@@ -1092,7 +1105,9 @@ class BudgetApp(tk.Tk):
         self.lbl_tx_count.pack(side=tk.RIGHT)
 
         cols = ("idx", "date", "detail_project", "account", "sub_account", "summary", "amount", "rule")
-        self.tree_tx = ttk.Treeview(self.tab_transactions, columns=cols, show="headings", style="Budget.Treeview")
+        self.tree_tx, self.scroll_tx_y, self.scroll_tx_x = self._create_scrollable_tree(
+            self.tab_transactions, cols, style="Budget.Treeview"
+        )
 
         headings = [
             ("idx", "연번", 50, "center"),
@@ -1107,17 +1122,9 @@ class BudgetApp(tk.Tk):
 
         for col_id, col_text, col_w, col_align in headings:
             self.tree_tx.heading(col_id, text=col_text)
-            self.tree_tx.column(col_id, width=col_w, anchor=col_align)
+            self.tree_tx.column(col_id, width=col_w, anchor=col_align, stretch=False)
 
         self.tree_tx.bind("<Double-1>", self._on_double_click_tx)
-
-        scroll_y = ttk.Scrollbar(self.tab_transactions, orient=tk.VERTICAL, command=self.tree_tx.yview)
-        scroll_x = ttk.Scrollbar(self.tab_transactions, orient=tk.HORIZONTAL, command=self.tree_tx.xview)
-        self.tree_tx.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
-
-        self.tree_tx.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=6)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y, pady=6, padx=(0, 8))
-        scroll_x.pack(side=tk.BOTTOM, fill=tk.X, padx=8)
 
         self.tree_tx.tag_configure("unclassified", foreground="#ED7D31", font=("맑은 고딕", 9, "bold"))
 
@@ -1131,33 +1138,33 @@ class BudgetApp(tk.Tk):
         left_frame = tk.LabelFrame(container, text=" 🔄 매월 반복 고정지출 (월정액 × 12월까지 잔여월수) ", font=("맑은 고딕", 10, "bold"), bg="#FFFFFF", padx=8, pady=8)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
-        self.tree_rec = ttk.Treeview(left_frame, columns=("account", "sub_account", "monthly", "desc"), show="headings", height=10)
+        self.tree_rec, self.scroll_rec_y, self.scroll_rec_x = self._create_scrollable_tree(
+            left_frame, ("account", "sub_account", "monthly", "desc"), height=10, padx=0, pady=0
+        )
         self.tree_rec.heading("account", text="통계목")
         self.tree_rec.heading("sub_account", text="세목")
         self.tree_rec.heading("monthly", text="월정액 (원)")
         self.tree_rec.heading("desc", text="지출 성격")
-        self.tree_rec.column("account", width=120)
-        self.tree_rec.column("sub_account", width=130)
-        self.tree_rec.column("monthly", width=95, anchor="e")
-        self.tree_rec.column("desc", width=160)
-        self.tree_rec.pack(fill=tk.BOTH, expand=True)
-
+        self.tree_rec.column("account", width=120, stretch=False)
+        self.tree_rec.column("sub_account", width=130, stretch=False)
+        self.tree_rec.column("monthly", width=95, anchor="e", stretch=False)
+        self.tree_rec.column("desc", width=160, stretch=False)
         right_frame = tk.LabelFrame(container, text=" 📌 하반기(9~12월) 집행예정 사업비 계획 ", font=("맑은 고딕", 10, "bold"), bg="#FFFFFF", padx=8, pady=8)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
 
-        self.tree_sched = ttk.Treeview(right_frame, columns=("account", "sub_account", "month", "amount", "desc"), show="headings", height=10)
+        self.tree_sched, self.scroll_sched_y, self.scroll_sched_x = self._create_scrollable_tree(
+            right_frame, ("account", "sub_account", "month", "amount", "desc"), height=10, padx=0, pady=0
+        )
         self.tree_sched.heading("account", text="통계목")
         self.tree_sched.heading("sub_account", text="세목")
         self.tree_sched.heading("month", text="예정월")
         self.tree_sched.heading("amount", text="예정금액 (원)")
         self.tree_sched.heading("desc", text="사업 내용")
-        self.tree_sched.column("account", width=110)
-        self.tree_sched.column("sub_account", width=120)
-        self.tree_sched.column("month", width=60, anchor="center")
-        self.tree_sched.column("amount", width=95, anchor="e")
-        self.tree_sched.column("desc", width=160)
-        self.tree_sched.pack(fill=tk.BOTH, expand=True)
-
+        self.tree_sched.column("account", width=110, stretch=False)
+        self.tree_sched.column("sub_account", width=120, stretch=False)
+        self.tree_sched.column("month", width=60, anchor="center", stretch=False)
+        self.tree_sched.column("amount", width=95, anchor="e", stretch=False)
+        self.tree_sched.column("desc", width=160, stretch=False)
         self._render_forecast_tab_data()
 
     def _render_forecast_tab_data(self):
@@ -1212,26 +1219,22 @@ class BudgetApp(tk.Tk):
         btn_auto_infer.pack(side=tk.RIGHT)
 
         cols = ("account", "sub_account", "condition", "priority", "auto")
-        self.tree_rules_view = ttk.Treeview(container, columns=cols, show="headings", style="Budget.Treeview")
+        self.tree_rules_view, self.scroll_rules_y, self.scroll_rules_x = self._create_scrollable_tree(
+            container, cols, style="Budget.Treeview", padx=0, pady=0
+        )
         self.tree_rules_view.heading("account", text="통계목")
         self.tree_rules_view.heading("sub_account", text="매핑 세목")
         self.tree_rules_view.heading("condition", text="키워드 매칭 조건식 (AND / OR / NOT)")
         self.tree_rules_view.heading("priority", text="우선순위")
         self.tree_rules_view.heading("auto", text="구분")
 
-        self.tree_rules_view.column("account", width=140)
-        self.tree_rules_view.column("sub_account", width=160)
-        self.tree_rules_view.column("condition", width=500)
-        self.tree_rules_view.column("priority", width=70, anchor="center")
-        self.tree_rules_view.column("auto", width=90, anchor="center")
+        self.tree_rules_view.column("account", width=140, stretch=False)
+        self.tree_rules_view.column("sub_account", width=160, stretch=False)
+        self.tree_rules_view.column("condition", width=500, stretch=False)
+        self.tree_rules_view.column("priority", width=70, anchor="center", stretch=False)
+        self.tree_rules_view.column("auto", width=90, anchor="center", stretch=False)
 
         self.tree_rules_view.bind("<Double-1>", lambda e: self._on_edit_rule_dialog())
-
-        scroll_y = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree_rules_view.yview)
-        self.tree_rules_view.configure(yscrollcommand=scroll_y.set)
-
-        self.tree_rules_view.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
         self._render_rules_tab_data()
 
@@ -1268,6 +1271,22 @@ class BudgetApp(tk.Tk):
             "expense_sources": self.expense_sources,
         }
 
+    @staticmethod
+    def _empty_project_state():
+        return {
+            "base_budget_confirmed": False,
+            "base_budget_year": None,
+            "base_budget_source": "",
+            "budget_master": [],
+            "supplementary_budgets": [],
+            "rules": KeywordClassifier.get_default_rules(),
+            "recurring_plans": [],
+            "scheduled_plans": [],
+            "raw_transactions": [],
+            "transactions": [],
+            "expense_sources": [],
+        }
+
     def _apply_project_state(self, state):
         self.base_budget_confirmed = bool(state.get("base_budget_confirmed", False))
         self.base_budget_year = state.get("base_budget_year")
@@ -1286,6 +1305,7 @@ class BudgetApp(tk.Tk):
         self.classifier.set_rules(self.rules)
         self._save_configs()
         self._render_rules_tab_data()
+        self._render_forecast_tab_data()
         self._reclassify_and_refresh()
         self._update_expense_status()
 
@@ -1385,6 +1405,34 @@ class BudgetApp(tk.Tk):
             if choice and not self._on_save_project():
                 return
         self.destroy()
+
+    def _on_reset_all_data(self):
+        confirmed = messagebox.askyesno(
+            "입력 데이터 전체 초기화",
+            "현재 입력된 다음 내용을 모두 초기화합니다.\n\n"
+            "• 본예산 및 추경 예산\n"
+            "• e호조 지출현황\n"
+            "• 연말 지출계획\n"
+            "• 사용자 추가 분류규칙\n\n"
+            "기존에 저장한 .ebudget 파일 자체는 삭제되지 않습니다.\n"
+            "계속하시겠습니까?",
+        )
+        if not confirmed:
+            return
+
+        self.current_project_path = None
+        self.last_output_file = ""
+        self._apply_project_state(self._empty_project_state())
+        if hasattr(self, "entry_search_tx"):
+            self.entry_search_tx.delete(0, tk.END)
+        self.project_dirty = True
+        self._update_window_title()
+        self.log_text.delete("1.0", tk.END)
+        self.log("입력 데이터 전체 초기화 완료: 기존 저장파일은 유지됩니다.", "SUCCESS")
+        messagebox.showinfo(
+            "초기화 완료",
+            "모든 입력 데이터를 초기화했습니다.\n기존에 저장한 .ebudget 파일은 삭제되지 않았습니다.",
+        )
 
     def _on_generate_sample(self):
         sample_path = os.path.join(self.base_dir, "sample", "e호조_23310_샘플.xlsx")
@@ -1842,7 +1890,7 @@ class BudgetApp(tk.Tk):
             f"• 누적 집행액: {sum(int(tx.get('amount', 0)) for tx in self.transactions):,}원\n"
             f"• 예산 통계목/세목 연결: {classified_count}건\n"
             f"• 미분류: {len(self.transactions) - classified_count}건\n\n"
-            "다른 PC로 전달하려면 [다른 이름으로 저장]을 눌러 .ebudget 파일로 저장하세요.",
+            "다른 PC로 전달하려면 우측 상단 [저장 ▼]에서 [다른 이름으로 저장]을 선택하세요.",
         )
 
     def _render_ledger_table(self):
